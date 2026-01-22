@@ -227,11 +227,7 @@ def show(client, db_name, user_email, real_name):
     st.markdown("---")
     st.subheader("📤 發送日報到 LINE")
     
-    # 確保只抓取日期的比較邏輯正確
     today_date = date.today()
-    
-    # 注意：這裡使用 edited_df (最新的編輯內容)
-    # 需確保 '日期' 欄位是 date 類型 (st.data_editor 通常會返回 date 物件)
     today_data = edited_df[edited_df["日期"] == today_date]
     
     valid_rows = []
@@ -278,7 +274,8 @@ def show(client, db_name, user_email, real_name):
         msg_text = "\n".join(msg_lines)
         encoded_text = urllib.parse.quote(msg_text)
         
-        share_url = f"https://line.me/R/share?text={encoded_text}"
+        # [修正處] 改用 msg/text 格式，以確保在電腦版也能正確開啟傳送視窗
+        share_url = f"https://line.me/R/msg/text/?{encoded_text}"
         
         col_btn, col_copy = st.columns([1, 1])
         
