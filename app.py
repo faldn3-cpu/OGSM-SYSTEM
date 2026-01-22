@@ -381,7 +381,7 @@ def main():
     with st.sidebar:
         greeting = get_greeting()
         st.write(f"👤 **{st.session_state.real_name}**")
-        st.caption(f"{greeting} | 權限: {st.session_state.role}")
+        st.caption(greeting)
         st.markdown("<br>", unsafe_allow_html=True) 
 
         menu_options = [
