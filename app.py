@@ -495,10 +495,19 @@ def main():
             tab1, tab2 = st.tabs(["會員登入", "忘記密碼"])
             
             with tab1:
+                # 【新增】從 Cookie 讀取上次登入的帳號
+                last_email = cookie_manager.get("last_email") or ""
+                
                 with st.form("login"):
-                    email = st.text_input("Email", max_chars=100)
-                    pwd = st.text_input("密碼", type="password", max_chars=50)
-                    remember = st.checkbox("記住我 (30天)")
+                    email = st.text_input("Email", value=last_email, max_chars=100, placeholder="請輸入您的 Email")
+                    pwd = st.text_input("密碼", type="password", max_chars=50, placeholder="請輸入密碼")
+                    
+                    # 【優化】兩個選項分開顯示
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        remember_me = st.checkbox("記住我 (30天)", value=True)
+                    with col_b:
+                        remember_email = st.checkbox("記住帳號", value=True)
                     
                     if st.form_submit_button("登入", use_container_width=True):
                         if not email or not pwd:
@@ -506,7 +515,23 @@ def main():
                         else:
                             success, result = login(email, pwd)
                             if success:
-                                if remember:
+                                # 【新增】儲存帳號到 Cookie (如果勾選「記住帳號」)
+                                if remember_email:
+                                    try:
+                                        # 設定 Cookie 有效期 1 年
+                                        email_expires = datetime.now(timezone(timedelta(hours=8))) + timedelta(days=365)
+                                        cookie_manager.set("last_email", email, expires_at=email_expires)
+                                    except Exception as e:
+                                        logging.error(f"Failed to save email cookie: {e}")
+                                else:
+                                    # 如果取消勾選，刪除已儲存的帳號
+                                    try:
+                                        cookie_manager.delete("last_email")
+                                    except:
+                                        pass
+                                
+                                # 【修改】使用 remember_me 而非 remember
+                                if remember_me:
                                     token_result = create_session_token(email)
                                     if token_result != (False, "速率限制"):
                                         token, expires = token_result
@@ -523,8 +548,11 @@ def main():
                                 st.error(result)
             
             with tab2:
+                # 【新增】在忘記密碼頁面也記住輸入的 Email
+                last_reset_email = cookie_manager.get("last_email") or ""
+                
                 if st.session_state.reset_stage == 0:
-                    r_email = st.text_input("註冊 Email", max_chars=100)
+                    r_email = st.text_input("註冊 Email", value=last_reset_email, max_chars=100, placeholder="請輸入您註冊時使用的 Email")
                     
                     if st.button("發送驗證碼", use_container_width=True):
                         if not r_email:
