@@ -8,7 +8,7 @@ import json
 
 # === 設定 LIFF ID ===
 # 請確保此 ID 在 LINE Developers Console 已開啟 "Share Target Picker" 權限
-LIFF_ID = "2008908706-VqUYGFLL"
+LIFF_ID = "2008945289-UvXWe3BK"
 
 def get_tw_time():
     tw_tz = timezone(timedelta(hours=8))
