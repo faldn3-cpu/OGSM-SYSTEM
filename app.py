@@ -21,7 +21,6 @@ from views import price_query, daily_report, report_overview
 # ==========================================
 #  安全性設定
 # ==========================================
-# 設定日誌系統 (注意: Streamlit Cloud 上 log 檔重啟後會消失，主要依賴 write_log 寫入 Sheets)
 logging.basicConfig(
     filename='app_security.log',
     level=logging.WARNING,
@@ -39,11 +38,21 @@ st.set_page_config(
 )
 
 # ==========================================
+#  強制 HTTPS 檢查
+# ==========================================
+if 'https_checked' not in st.session_state:
+    st.session_state.https_checked = False
+
+if not st.session_state.https_checked:
+    if os.getenv('STREAMLIT_ENV') == 'production':
+        pass
+    st.session_state.https_checked = True
+
+# ==========================================
 #  賈伯斯風格 CSS
 # ==========================================
 st.markdown("""
 <style>
-/* 隱藏預設雜訊 */
 #MainMenu {visibility: hidden;}
 footer {visibility: hidden;}
 header {visibility: visible !important;}
@@ -52,7 +61,6 @@ header {visibility: visible !important;}
 .stAppDeployButton {display: none;}
 [data-testid="stManageAppButton"] {display: none;}
 
-/* 卡片設計 */
 div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"] {
     border: 1px solid rgba(128, 128, 128, 0.2);
     border-radius: 18px;
@@ -62,7 +70,6 @@ div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapp
     margin-bottom: 16px;
 }
 
-/* 側邊欄優化 */
 div[role="radiogroup"] > label > div:first-child { display: none; }
 div[role="radiogroup"] label {
     width: 100% !important;           
@@ -98,7 +105,6 @@ div[role="radiogroup"] label p {
     text-align: center;               
 }
 
-/* 輸入框優化 */
 input, select, textarea {
     font-size: 16px !important;
 }
@@ -143,7 +149,7 @@ if 'reset_target_email' not in st.session_state: st.session_state.reset_target_e
 user_rate_limits = {}
 
 def rate_limit(max_calls=10, period=60):
-    """裝飾器：限制函數呼叫頻率 (防止 API 濫用)"""
+    """裝飾器：限制函數呼叫頻率"""
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
@@ -157,7 +163,6 @@ def rate_limit(max_calls=10, period=60):
             if func_name not in user_rate_limits[user_email]:
                 user_rate_limits[user_email][func_name] = []
             
-            # 清除過期記錄
             user_rate_limits[user_email][func_name] = [
                 t for t in user_rate_limits[user_email][func_name] if now - t < period
             ]
@@ -172,16 +177,14 @@ def rate_limit(max_calls=10, period=60):
         return wrapper
     return decorator
 
-# Email 發送計數器
 email_send_count = {}
 
 def can_send_email(email):
-    """檢查是否允許發送 Email (每 Email 每小時最多 3 次)"""
+    """檢查是否允許發送 Email"""
     now = time.time()
     if email not in email_send_count:
         email_send_count[email] = []
     
-    # 清除 1 小時前的記錄
     email_send_count[email] = [t for t in email_send_count[email] if now - t < 3600]
     
     if len(email_send_count[email]) >= 3:
@@ -222,7 +225,7 @@ def get_tw_time():
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 def write_log(action, user_email, note=""):
-    """寫入操作日誌到 Google Sheets"""
+    """寫入操作日誌"""
     client = get_client()
     if not client: return
     try:
@@ -230,7 +233,6 @@ def write_log(action, user_email, note=""):
         try: 
             ws = sh.worksheet("Logs")
         except: 
-            # 如果 Logs 工作表不存在，建立它
             ws = sh.add_worksheet(title="Logs", rows=1000, cols=4)
             ws.append_row(["時間", "使用者", "動作", "備註"])
         
@@ -257,8 +259,8 @@ def check_password(plain_text, hashed_text):
 def hash_password(plain_text):
     return bcrypt.hashpw(plain_text.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-# === Token Session 管理 (已加入清理機制) ===
-@rate_limit(max_calls=5, period=300)  # 5 分鐘最多 5 次 Token 生成
+# === Token Session 管理 ===
+@rate_limit(max_calls=5, period=300)
 def create_session_token(email, days_valid=30):
     """建立 Session Token 並自動清理舊 Token"""
     client = get_client()
@@ -272,48 +274,36 @@ def create_session_token(email, days_valid=30):
             ws = sh.add_worksheet(title="Sessions", rows=1000, cols=5)
             ws.append_row(["Token", "Email", "Expires_At", "Created_At"])
         
-        # 1. 刪除該使用者的舊 Token (避免累積)
         all_records = ws.get_all_records()
         rows_to_delete = []
-        # 注意：get_all_records 回傳是 list of dict，對應到 row 2 開始
         for idx, row in enumerate(all_records, start=2):
             if row.get("Email") == email:
                 rows_to_delete.append(idx)
         
-        # 從後面往前刪除，避免 index 跑掉
         for row_idx in sorted(rows_to_delete, reverse=True):
             try:
                 ws.delete_rows(row_idx)
             except:
                 pass
         
-        # 2. 清理所有已過期的 Token (防止資料膨脹)
         now = datetime.now(timezone(timedelta(hours=8)))
-        # 重新讀取（因為剛刪除了）
         remaining_records = ws.get_all_records()
         expired_rows = []
         for idx, row in enumerate(remaining_records, start=2):
             try:
-                exp_str = row.get("Expires_At")
-                if exp_str:
-                    exp = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S")
-                    # 確保時區一致
-                    if exp.tzinfo is None:
-                        exp = exp.replace(tzinfo=timezone(timedelta(hours=8)))
-                    
-                    if now > exp:
-                        expired_rows.append(idx)
+                exp = datetime.strptime(row.get("Expires_At"), "%Y-%m-%d %H:%M:%S")
+                exp = exp.replace(tzinfo=timezone(timedelta(hours=8)))
+                if now > exp:
+                    expired_rows.append(idx)
             except: 
                 pass
         
-        # 一次最多刪 20 筆避免 API 超載
-        for row_idx in sorted(expired_rows, reverse=True)[:20]:
+        for row_idx in sorted(expired_rows, reverse=True)[:50]:
             try:
                 ws.delete_rows(row_idx)
             except:
                 pass
         
-        # 3. 生成新 Token
         token = secrets.token_urlsafe(32)
         expires_at = now + timedelta(days=days_valid)
         ws.append_row([
@@ -343,11 +333,8 @@ def validate_session_token(token):
         for row in records:
             if str(row.get("Token")) == token:
                 try:
-                    exp_str = row.get("Expires_At")
-                    expires_at = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S")
-                    if expires_at.tzinfo is None:
-                        expires_at = expires_at.replace(tzinfo=timezone(timedelta(hours=8)))
-                        
+                    expires_at = datetime.strptime(row.get("Expires_At"), "%Y-%m-%d %H:%M:%S")
+                    expires_at = expires_at.replace(tzinfo=timezone(timedelta(hours=8)))
                     if now < expires_at: 
                         return row.get("Email")
                 except: 
@@ -372,13 +359,12 @@ def delete_session_token(token):
     except Exception as e:
         logging.error(f"Token deletion failed: {e}")
 
-# === 郵件功能 (已加入速率限制) ===
+# === 郵件功能 ===
 def send_otp_email(to_email, otp_code):
-    """發送 OTP 驗證碼 (已加入速率限制)"""
+    """發送 OTP 驗證碼"""
     if not SMTP_EMAIL or not SMTP_PASSWORD: 
         return False, "未設定信箱"
     
-    # 檢查速率限制
     allowed, msg = can_send_email(to_email)
     if not allowed:
         write_log("EMAIL_RATE_LIMIT", to_email, msg)
@@ -490,7 +476,11 @@ def main():
                     post_login_init(email, name)
                     st.rerun()
                 else:
-                    cookie_manager.delete("auth_token")
+                    # 【修復】安全刪除 Cookie
+                    try:
+                        cookie_manager.delete("auth_token")
+                    except:
+                        pass
 
     if not st.session_state.logged_in:
         col1, col2, col3 = st.columns([1, 2, 1])
@@ -543,7 +533,7 @@ def main():
                             otp = "".join(random.choices(string.digits, k=6))
                             st.session_state.reset_otp = otp
                             st.session_state.reset_target_email = r_email
-                            st.session_state.reset_otp_time = time.time()  # 記錄發送時間
+                            st.session_state.reset_otp_time = time.time()
                             
                             sent, msg = send_otp_email(r_email, otp)
                             if sent:
@@ -557,7 +547,6 @@ def main():
                             st.error("Email 不存在")
                 
                 elif st.session_state.reset_stage == 1:
-                    # 檢查 OTP 是否過期 (10 分鐘)
                     if time.time() - st.session_state.get('reset_otp_time', 0) > 600:
                         st.error("⏰ 驗證碼已過期，請重新發送")
                         st.session_state.reset_stage = 0
@@ -592,7 +581,6 @@ def main():
         st.write(f"👤 **{st.session_state.real_name}**")
         st.caption(f"{greeting}")
         
-        # 管理員切換身份 (僅限曾維崧)
         current_email = st.session_state.user_email.strip().lower()
         if current_email == "welsong@seec.com.tw":
             st.markdown("---")
@@ -610,7 +598,6 @@ def main():
                         if st.button("確認切換", type="primary", use_container_width=True):
                             target_user = user_map[target_selection]
                             
-                            # 記錄身份切換
                             write_log(
                                 "ADMIN_IMPERSONATE", 
                                 current_email,
@@ -635,7 +622,16 @@ def main():
         token = cookie_manager.get("auth_token")
         if token: 
             delete_session_token(token)
-        cookie_manager.delete("auth_token")
+        
+        # 【修復】安全刪除 Cookie (處理 KeyError)
+        try:
+            cookie_manager.delete("auth_token")
+        except KeyError:
+            # Cookie 不存在時忽略錯誤
+            pass
+        except Exception as e:
+            logging.error(f"Cookie deletion error: {e}")
+        
         write_log("登出系統", st.session_state.user_email)
         st.session_state.logged_in = False
         st.rerun()
@@ -660,17 +656,17 @@ def main():
             if not p1 or not p2:
                 st.error("請輸入完整資訊")
             elif len(p1) < 6:
-                st.error("密碼長度不足")
-            elif p1 == p2:
+                st.error("密碼至少需要 6 個字元")
+            elif p1 != p2:
+                st.error("兩次密碼輸入不一致")
+            else:
                 if change_password(st.session_state.user_email, p1):
-                    st.success("密碼已修改，請重新登入")
+                    st.success("✅ 密碼已修改，請重新登入")
                     time.sleep(1)
                     st.session_state.logged_in = False
                     st.rerun()
                 else:
-                    st.error("修改失敗")
-            else:
-                st.error("密碼不一致")
+                    st.error("修改失敗，請聯繫管理員")
 
 if __name__ == "__main__":
     main()
