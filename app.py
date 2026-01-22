@@ -41,7 +41,6 @@ header {visibility: visible !important;}
 [data-testid="stManageAppButton"] {display: none;}
 
 /* 卡片設計 - 適應深色/淺色模式 */
-/* 使用 var(--secondary-background-color) 讓它自動跟隨系統主題變色 */
 div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"] {
     border: 1px solid rgba(128, 128, 128, 0.2);
     border-radius: 18px;
@@ -361,13 +360,40 @@ def main():
                                 st.rerun()
                             else: st.error("重置失敗")
                         else: st.error("驗證碼錯誤")
-
         return
 
     # 側邊欄
     with st.sidebar:
-        st.caption(get_greeting())
+        greeting = get_greeting()
         st.write(f"👤 **{st.session_state.real_name}**")
+        
+        # [新增功能] 超級管理員切換身分 (僅限 曾維崧 welsong@seec.com.tw)
+        if st.session_state.user_email.strip().lower() == "welsong@seec.com.tw" or st.session_state.real_name == "曾維崧":
+            st.markdown("---")
+            with st.expander("👑 管理員切換身分"):
+                try:
+                    client = get_client() # 確保在 Sidebar 內有 Client
+                    if client:
+                        sh = client.open(PRICE_DB_NAME)
+                        ws_users = sh.worksheet("Users")
+                        all_records = ws_users.get_all_records()
+                        
+                        # 製作選項: "姓名 (Email)"
+                        user_map = {f"{u.get('name')} ({u.get('email')})": u for u in all_records}
+                        
+                        target_selection = st.selectbox("選擇模擬對象", list(user_map.keys()))
+                        
+                        if st.button("確認切換", type="primary", use_container_width=True):
+                            target_user = user_map[target_selection]
+                            # 執行切換
+                            post_login_init(target_user.get('email'), target_user.get('name'))
+                            st.success(f"已切換為：{target_user.get('name')}")
+                            time.sleep(1)
+                            st.rerun()
+                except Exception as e:
+                    st.error(f"讀取使用者列表失敗")
+
+        st.markdown("---")
         
         pages = ["📝 寫 OGSM 日報", "💰 經銷牌價查詢", "🔑 修改密碼", "📊 日報總覽", "👋 登出系統"]
         sel = st.radio("功能", pages, key="page_radio", label_visibility="collapsed")
