@@ -11,7 +11,7 @@ import json
 LIFF_ID = "2008945289-UvXWe3BK"
 
 # === 設定您的 App 網址 (用於登入後跳轉回來) ===
-APP_URL = "https://seec-sales-system.streamlit.app"
+APP_URL = "https://seecfa-ogsm-system.streamlit.app/"
 
 def get_tw_time():
     tw_tz = timezone(timedelta(hours=8))
