@@ -5,13 +5,10 @@ import pandas as pd
 import gspread 
 import time
 import json
+import urllib.parse
 
 # === 設定 LIFF ID ===
-# 請確保此 ID 在 LINE Developers Console 已開啟 "Share Target Picker" 權限
 LIFF_ID = "2008945289-UvXWe3BK"
-
-# === 設定您的 App 網址 (用於登入後跳轉回來) ===
-APP_URL = "https://seecfa-ogsm-system.streamlit.app/"
 
 def get_tw_time():
     tw_tz = timezone(timedelta(hours=8))
@@ -233,7 +230,7 @@ def show(client, db_name, user_email, real_name):
                         st.error(f"上傳失敗：{msg}")
 
     st.markdown("---")
-    st.subheader("📤 發送日報到 LINE (LIFF 增強版)")
+    st.subheader("📤 發送日報到 LINE (智慧雙軌版)")
     
     today_date = date.today()
     today_data = edited_df[edited_df["日期"] == today_date]
@@ -281,10 +278,13 @@ def show(client, db_name, user_email, real_name):
         
         msg_text = "\n".join(msg_lines)
         
-        # === JS Escaping (防止文字中斷 JS 程式碼) ===
+        # 1. 給 LIFF 用的 JSON 字串
         safe_msg_json = json.dumps(msg_text) 
+        
+        # 2. 給 PC Web Share 用的 URL 編碼
+        encoded_msg = urllib.parse.quote(msg_text)
 
-        # === 嵌入 LIFF JavaScript (增強版: 含 Redirect Logic) ===
+        # === 嵌入 LIFF JavaScript (PC/Mobile 智慧分流版) ===
         liff_script = f"""
         <html>
         <head>
@@ -309,63 +309,65 @@ def show(client, db_name, user_email, real_name):
                 .status {{
                     margin-top: 8px;
                     font-size: 12px;
-                    color: #666;
+                    color: #555;
                     text-align: center;
+                    font-weight: bold;
                 }}
             </style>
         </head>
         <body>
-            <button id="sendBtn" class="liff-btn" onclick="sendLiffMessage()">🚀 開啟 LINE 選擇好友傳送</button>
-            <div id="status" class="status">系統準備中...</div>
+            <button id="sendBtn" class="liff-btn" onclick="handleSend()">🚀 開啟 LINE 選擇好友傳送</button>
+            <div id="status" class="status">系統偵測中...</div>
 
             <script>
-                // 填入後端定義好的變數
                 const LIFF_ID = "{LIFF_ID}";
-                const APP_URL = "{APP_URL}"; 
+                const WEB_SHARE_URL = "https://line.me/R/share?text={encoded_msg}";
 
                 async function initializeLiff() {{
                     try {{
                         await liff.init({{ liffId: LIFF_ID }});
                         
-                        // 檢查是否已登入
-                        if (!liff.isLoggedIn()) {{
-                            document.getElementById("status").innerText = "尚未登入，點擊按鈕將進行登入...";
+                        // 判斷當前環境
+                        if (liff.isInClient()) {{
+                            // 手機版 (LINE App 內)
+                            document.getElementById("status").innerText = "📱 已連線 LINE App (Mobile Mode)";
+                            document.getElementById("status").style.color = "#06c755";
                         }} else {{
-                            document.getElementById("status").innerText = "✅ LINE 已連線，可發送";
+                            // 電腦版/外部瀏覽器 -> 切換為 Web Share 模式
+                            document.getElementById("status").innerText = "💻 已連線 Web 瀏覽器 (Desktop Mode)";
+                            document.getElementById("status").style.color = "#007bff";
                         }}
                     }} catch (err) {{
-                        document.getElementById("status").innerText = "初始化錯誤 (請檢查 ID/網址): " + err;
+                        // 初始化失敗通常是網路或 ID 問題，降級為 Web Share
+                        console.error(err);
+                        document.getElementById("status").innerText = "⚠️ 模式切換中 (Fallback Mode)";
                     }}
                 }}
 
-                async function sendLiffMessage() {{
-                    try {{
-                        // === 關鍵修正：若未登入，強制跳轉回 App 網址 ===
-                        if (!liff.isInClient() && !liff.isLoggedIn()) {{
-                            liff.login({{ redirectUri: APP_URL }});
-                            return;
-                        }}
-
-                        const message = {safe_msg_json}; 
-
-                        if (liff.isApiAvailable('shareTargetPicker')) {{
-                            const res = await liff.shareTargetPicker([
-                                {{
-                                    type: "text",
-                                    text: message
+                async function handleSend() {{
+                    // === 策略 1: 如果是在 LINE App 內 (手機)，使用原生 LIFF 選人 ===
+                    if (liff.isInClient()) {{
+                        try {{
+                            if (liff.isApiAvailable('shareTargetPicker')) {{
+                                const res = await liff.shareTargetPicker([
+                                    {{ type: "text", text: {safe_msg_json} }}
+                                ]);
+                                if (res) {{
+                                    liff.closeWindow();
+                                }} else {{
+                                    document.getElementById("status").innerText = "❌ 您取消了發送";
                                 }}
-                            ]);
-                            if (res) {{
-                                document.getElementById("status").innerText = "✅ 發送成功！";
                             }} else {{
-                                document.getElementById("status").innerText = "❌ 取消發送";
+                                alert("您的 LINE 版本過舊，不支援選人功能");
                             }}
-                        }} else {{
-                            document.getElementById("status").innerText = "⚠️ 此裝置不支援直接選人，請登入手機版 LINE 使用。";
-                            alert("請使用手機版 LINE 操作，或手動複製下方文字。");
+                        }} catch (error) {{
+                            alert("發送錯誤: " + error.message);
                         }}
-                    }} catch (error) {{
-                        document.getElementById("status").innerText = "❌ 執行錯誤: " + error;
+                    }} 
+                    // === 策略 2: 如果是在電腦/網頁，直接開新視窗用 Web Share (避開 Iframe 阻擋) ===
+                    else {{
+                        window.open(WEB_SHARE_URL, "_blank");
+                        document.getElementById("status").innerText = "✅ 已開啟分享視窗";
                     }}
                 }}
 
@@ -378,9 +380,9 @@ def show(client, db_name, user_email, real_name):
         col_btn, col_copy = st.columns([1, 1])
         
         with col_btn:
-            st.info("👇 使用 LIFF 強力傳送 (支援電腦/手機)")
-            components.html(liff_script, height=120)
+            st.info("👇 智慧傳送 (自動切換手機/電腦模式)")
+            components.html(liff_script, height=140) 
             
         with col_copy:
-            st.warning("👇 備用：若 LIFF 無法開啟，請手動複製")
+            st.warning("👇 備用：若按鈕無反應，請手動複製")
             st.code(msg_text, language="text")
