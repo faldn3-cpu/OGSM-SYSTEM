@@ -159,13 +159,30 @@ def write_log(action, user_email, note=""):
         ws.append_row([get_tw_time(), user_email, action, note])
     except: pass
 
+# === [溫馨功能] 智慧問候語 ===
 def get_greeting():
     tw_tz = timezone(timedelta(hours=8))
-    current_hour = datetime.now(tw_tz).hour
-    if 5 <= current_hour < 11: return "早安 ☀️"
-    elif 11 <= current_hour < 18: return "你好 👋"
-    elif 18 <= current_hour < 23: return "晚安 🌙"
-    else: return "夜深了，不要太累了 ☕"
+    now = datetime.now(tw_tz)
+    current_hour = now.hour
+    weekday = now.weekday() # 0=週一, ..., 6=週日
+
+    # 1. 深夜時段 (22:00 ~ 05:00) - 最優先關心
+    if current_hour >= 22 or current_hour < 5:
+        return "夜深了，辛苦了！工作之餘別忘了休息，早點睡喔 🛌"
+
+    # 2. 假日特別問候 (週六、週日)
+    if weekday >= 5: 
+        return "週末愉快！難得的假期，放慢腳步好好放鬆一下吧 🌿"
+
+    # 3. 平日分時段問候
+    if 5 <= current_hour < 11:
+        return "早安！一日之計在於晨，祝你今天活力滿滿 ☀️"
+    elif 11 <= current_hour < 14:
+        return "午安！忙碌了一早上，記得吃飯休息一下再出發 🍱"
+    elif 14 <= current_hour < 18:
+        return "下午好！喝杯茶或咖啡提提神，下半場繼續加油 💪"
+    else: # 18:00 - 22:00
+        return "晚上好！今天工作辛苦了，該讓自己放鬆一下囉 🌙"
 
 def check_password(plain_text, hashed_text):
     try: return bcrypt.checkpw(plain_text.encode('utf-8'), hashed_text.encode('utf-8'))
@@ -381,6 +398,7 @@ def main():
     with st.sidebar:
         greeting = get_greeting()
         st.write(f"👤 **{st.session_state.real_name}**")
+        # [修改] 移除權限顯示，只保留溫馨問候
         st.caption(greeting)
         st.markdown("<br>", unsafe_allow_html=True) 
 
