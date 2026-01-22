@@ -13,7 +13,7 @@ def get_tw_time():
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 def write_search_log(client, db_name, user_email, query, result_count):
-    """記錄搜尋行為"""
+    """記錄搜尋行為 (BI 商業分析用)"""
     try:
         sh = client.open(db_name)
         try: 
@@ -87,13 +87,14 @@ def sanitize_search_query(query):
 # ==========================================
 @st.dialog("🧮 業務報價試算")
 def show_calculator_dialog(spec, desc, base_price):
+    # 【修正 1】將 "經銷底價:" 修改為 "經銷價："
     st.markdown(f"""
     <div style="background-color:#f8f9fa; padding:10px; border-radius:8px; margin-bottom:15px;">
         <div style="font-weight:bold; font-size:1.1em; color:#333;">{spec}</div>
         <div style="font-size:0.9em; color:#666;">{desc}</div>
         <hr style="margin:8px 0;">
         <div style="display:flex; justify-content:space-between; align-items:center;">
-            <span>經銷底價:</span>
+            <span>經銷價：</span>
             <span style="color:#d9534f; font-weight:bold; font-size:1.1em;">${base_price:,.0f}</span>
         </div>
     </div>
@@ -122,9 +123,12 @@ def show_calculator_dialog(spec, desc, base_price):
     with col1:
         st.number_input("販售折數 (%)", min_value=0.0, max_value=300.0, step=0.5, format="%.2f", key="calc_discount", on_change=on_discount_change)
     with col2:
+        # 【說明】Streamlit 的 st.number_input 不支援輸入時顯示千分位 (%,d)，維持 %d (整數) 是最穩定的做法
         st.number_input("販售價格 ($)", min_value=0, step=100, format="%d", key="calc_price", on_change=on_price_change)
     
     final_p = st.session_state.calc_price
+    
+    # 這裡的最終金額顯示已經包含千分位 (final_p:,.0f)
     st.markdown(f"""
     <div style="
         margin-top: 15px; padding: 15px;
@@ -142,7 +146,6 @@ def show_calculator_dialog(spec, desc, base_price):
 def show(client, db_name, user_email, real_name, is_manager):
     st.title("💰 經銷牌價查詢")
     
-    # 【新增】顯示資料更新日期 (讀取 Users D1)
     update_date = fetch_last_update_date(db_name, client)
     st.caption(f"資料更新日期：{update_date}")
     
@@ -237,7 +240,6 @@ def show(client, db_name, user_email, real_name, is_manager):
                 if not dist_price_cols:
                     dist_price_cols = [c for c in df.columns if '經銷' in c]
 
-                # 【修正】如果找到經銷欄位就用，找不到就直接 None，絕不 fallback 到牌價
                 if dist_price_cols:
                     price_col = dist_price_cols[0]
                 else:
@@ -254,7 +256,6 @@ def show(client, db_name, user_email, real_name, is_manager):
                     else:
                         price_display = str(raw_price)
                 elif not price_col:
-                    # 如果找不到經銷價欄位，顯示錯誤訊息
                     price_display = "⚠️ 無經銷價"
 
                 # 4. 渲染卡片
@@ -266,7 +267,6 @@ def show(client, db_name, user_email, real_name, is_manager):
                         <div class="card-desc">{product_desc}</div>
                         <div class="card-price">{price_display}</div>
                         """, unsafe_allow_html=True)
-                        # 【修正】已移除 st.caption 來源顯示
 
                     with c2:
                         st.write("")
