@@ -13,7 +13,7 @@ def get_tw_time():
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 def write_search_log(client, db_name, user_email, query, result_count):
-    """記錄搜尋行為 (BI 商業分析用)"""
+    """記錄搜尋行為"""
     try:
         sh = client.open(db_name)
         try: 
@@ -26,11 +26,22 @@ def write_search_log(client, db_name, user_email, query, result_count):
     except Exception as e:
         logging.warning(f"Failed to write search log: {e}")
 
+@st.cache_data(ttl=600, show_spinner=False)
+def fetch_last_update_date(db_name, _client):
+    """讀取 Users 頁面的 D1 儲存格作為更新日期"""
+    try:
+        sh = _client.open(db_name)
+        ws = sh.worksheet("Users")
+        val = ws.acell('D1').value
+        return str(val) if val else "未知"
+    except Exception as e:
+        logging.warning(f"Failed to fetch update date: {e}")
+        return "未知"
+
 @st.cache_data(ttl=3600, show_spinner="正在從雲端下載最新價格表...")
 def fetch_price_data(db_name, _client):
     try:
         sh = _client.open(db_name)
-        # 優先找「經銷價(總)」，找不到找 Sheet1
         try:
             ws = sh.worksheet("經銷價(總)")
         except gspread.WorksheetNotFound:
@@ -40,9 +51,7 @@ def fetch_price_data(db_name, _client):
         if not data: return pd.DataFrame()
         
         df = pd.DataFrame(data)
-        # 移除全空行
         df = df.dropna(how='all')
-        # 全部轉字串以免搜尋報錯
         df = df.astype(str)
         return df
     except Exception as e:
@@ -54,7 +63,6 @@ def clean_currency(val):
     """將含有 $ , 或文字的價格字串轉為 float"""
     if not val or pd.isna(val): return 0.0
     val_str = str(val)
-    # 只保留數字和小數點
     clean_str = re.sub(r'[^\d.]', '', val_str)
     try:
         return float(clean_str)
@@ -67,17 +75,15 @@ def clean_currency(val):
 MAX_SEARCH_LENGTH = 50
 
 def sanitize_search_query(query):
-    """清理搜尋關鍵字"""
     if not query: return ""
     query = str(query).strip()
     if len(query) > MAX_SEARCH_LENGTH:
         query = query[:MAX_SEARCH_LENGTH]
-    # 移除特殊字元
     query = re.sub(r'[^\w\s\-\.\(\)\/]', '', query)
     return query
 
 # ==========================================
-#  3. 彈窗試算邏輯 (計算機)
+#  3. 彈窗試算邏輯
 # ==========================================
 @st.dialog("🧮 業務報價試算")
 def show_calculator_dialog(spec, desc, base_price):
@@ -93,18 +99,15 @@ def show_calculator_dialog(spec, desc, base_price):
     </div>
     """, unsafe_allow_html=True)
 
-    # 初始化計算機 Session
     if 'calc_discount' not in st.session_state: st.session_state.calc_discount = 100.00
     if 'calc_price' not in st.session_state: st.session_state.calc_price = int(base_price)
     if 'current_base_price' not in st.session_state: st.session_state.current_base_price = base_price
 
-    # 若切換不同產品,重置數值
     if st.session_state.current_base_price != base_price:
         st.session_state.current_base_price = base_price
         st.session_state.calc_discount = 100.00
         st.session_state.calc_price = int(base_price)
 
-    # 連動邏輯
     def on_discount_change():
         if st.session_state.current_base_price > 0:
             new_price = st.session_state.current_base_price * (st.session_state.calc_discount / 100)
@@ -122,7 +125,6 @@ def show_calculator_dialog(spec, desc, base_price):
         st.number_input("販售價格 ($)", min_value=0, step=100, format="%d", key="calc_price", on_change=on_price_change)
     
     final_p = st.session_state.calc_price
-    # 賈伯斯風格報價卡
     st.markdown(f"""
     <div style="
         margin-top: 15px; padding: 15px;
@@ -140,7 +142,11 @@ def show_calculator_dialog(spec, desc, base_price):
 def show(client, db_name, user_email, real_name, is_manager):
     st.title("💰 經銷牌價查詢")
     
-    # CSS 優化：針對手機版的卡片樣式
+    # 【新增】顯示資料更新日期 (讀取 Users D1)
+    update_date = fetch_last_update_date(db_name, client)
+    st.caption(f"資料更新日期：{update_date}")
+    
+    # CSS 優化
     st.markdown("""
     <style>
     .search-card {
@@ -158,7 +164,6 @@ def show(client, db_name, user_email, real_name, is_manager):
     .card-desc { font-size: 0.9rem; color: #666; margin-bottom: 8px; line-height: 1.4; }
     .card-price { font-weight: bold; font-size: 1.2rem; color: #0071e3; }
     
-    /* 深色模式適配 */
     @media (prefers-color-scheme: dark) {
         .search-card { background-color: #262730; border-color: #444; }
         .card-title { color: #fff; }
@@ -176,7 +181,6 @@ def show(client, db_name, user_email, real_name, is_manager):
         with col2:
             search_btn = st.button("搜尋", use_container_width=True, type="primary")
 
-    # 觸發搜尋
     if search_btn or query:
         query = sanitize_search_query(query)
         
@@ -189,14 +193,10 @@ def show(client, db_name, user_email, real_name, is_manager):
             st.error("無法讀取價格表，請聯繫管理員。")
             return
 
-        # 搜尋邏輯
         try:
             mask = df.apply(lambda row: row.astype(str).str.contains(query, case=False, regex=False).any(), axis=1)
             result_df = df[mask]
-            
-            # 記錄搜尋 Log (不阻擋主流程)
             write_search_log(client, db_name, user_email, query, len(result_df))
-            
         except Exception as e:
             st.error("搜尋發生錯誤")
             logging.error(f"Search error: {e}")
@@ -207,69 +207,78 @@ def show(client, db_name, user_email, real_name, is_manager):
         if result_df.empty:
             st.info("找不到符合的資料，請嘗試其他關鍵字。")
         else:
-            # 限制顯示數量
             MAX_RESULTS = 50
             if len(result_df) > MAX_RESULTS:
                 st.caption(f"⚠️ 資料過多，僅顯示前 {MAX_RESULTS} 筆")
                 result_df = result_df.head(MAX_RESULTS)
             
-            # === 卡片式顯示 (Mobile Friendly) ===
             for idx, row in result_df.iterrows():
-                # 1. 智慧判斷欄位 (Name)
+                # 1. 產品名稱
                 name_parts = []
-                # 嘗試常見的欄位名稱
                 for col in ["產品名稱", "規格", "Item", "品名", "Name"]:
                     val = str(row.get(col, "")).strip()
                     if val: name_parts.append(val)
-                # 如果都沒抓到，就抓第一欄
                 product_name = " | ".join(name_parts) if name_parts else str(row.values[0])
                 
-                # 2. 智慧判斷欄位 (Desc)
+                # 2. 產品描述
                 desc_parts = []
                 for col in ["型號", "備註", "說明", "Model", "Description"]:
                     val = str(row.get(col, "")).strip()
                     if val: desc_parts.append(val)
                 product_desc = " | ".join(desc_parts)
 
-                # 3. 智慧判斷欄位 (Price)
-                # 抓取含有 '價' 或 'Price' 或 'MSRP' 的欄位
-                price_col = next((c for c in df.columns if '價' in c or 'Price' in c or 'MSRP' in c), None)
+                # 3. 嚴格經銷價判斷逻辑
+                price_col = None
+                
+                # 策略 A: 找明確包含 "經銷" 且包含 "價" 的欄位
+                dist_price_cols = [c for c in df.columns if '經銷' in c and '價' in c]
+                
+                # 策略 B: 找包含 "經銷" 的欄位
+                if not dist_price_cols:
+                    dist_price_cols = [c for c in df.columns if '經銷' in c]
+
+                # 【修正】如果找到經銷欄位就用，找不到就直接 None，絕不 fallback 到牌價
+                if dist_price_cols:
+                    price_col = dist_price_cols[0]
+                else:
+                    price_col = None 
+
                 base_price = 0
                 price_display = "請洽詢"
                 
-                if price_col:
+                if price_col and price_col in row:
                     raw_price = row[price_col]
                     base_price = clean_currency(raw_price)
                     if base_price > 0:
                         price_display = f"${base_price:,.0f}" 
                     else:
                         price_display = str(raw_price)
+                elif not price_col:
+                    # 如果找不到經銷價欄位，顯示錯誤訊息
+                    price_display = "⚠️ 無經銷價"
 
                 # 4. 渲染卡片
                 with st.container():
-                    # 佈局：左邊資訊，右邊按鈕
                     c1, c2 = st.columns([3, 1])
-                    
                     with c1:
                         st.markdown(f"""
                         <div class="card-title">{product_name}</div>
                         <div class="card-desc">{product_desc}</div>
                         <div class="card-price">{price_display}</div>
                         """, unsafe_allow_html=True)
-                        
+                        # 【修正】已移除 st.caption 來源顯示
+
                     with c2:
-                        # 垂直置中按鈕
                         st.write("")
                         if base_price > 0:
                             if st.button("試算", key=f"btn_{idx}", use_container_width=True):
                                 show_calculator_dialog(product_name, product_desc, base_price)
                         else:
-                            st.caption("無牌價")
+                            st.caption("無法試算")
                     
-                    st.divider() # 分隔線
+                    st.divider()
 
     else:
-        # 空白狀態 (Empty State)
         st.info("👈 請輸入產品型號或規格開始查詢")
         with st.expander("ℹ️ 搜尋小撇步"):
             st.markdown("""
