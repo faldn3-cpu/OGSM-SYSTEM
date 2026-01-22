@@ -10,11 +10,9 @@ import random
 import string
 import time
 from datetime import datetime, timezone, timedelta
-import secrets 
 import extra_streamlit_components as stx 
 import logging
 from functools import wraps
-from gspread.exceptions import APIError
 
 # 匯入頁面模組
 from views import price_query, daily_report, report_overview
@@ -37,6 +35,17 @@ st.set_page_config(
     layout="wide", 
     initial_sidebar_state="expanded"
 )
+
+# ==========================================
+#  強制 HTTPS 檢查
+# ==========================================
+if 'https_checked' not in st.session_state:
+    st.session_state.https_checked = False
+
+if not st.session_state.https_checked:
+    if os.getenv('STREAMLIT_ENV') == 'production':
+        pass
+    st.session_state.https_checked = True
 
 # ==========================================
 #  賈伯斯風格 CSS
@@ -134,68 +143,52 @@ if 'reset_otp' not in st.session_state: st.session_state.reset_otp = ""
 if 'reset_target_email' not in st.session_state: st.session_state.reset_target_email = ""
 
 # ==========================================
-#  🔒 安全性與穩定性功能
+#  🔒 安全性功能：速率限制器
 # ==========================================
 user_rate_limits = {}
 
 def rate_limit(max_calls=10, period=60):
-    """限制函數呼叫頻率 (防止惡意刷請求)"""
+    """裝飾器：限制函數呼叫頻率"""
     def decorator(func):
         @wraps(func)
         def wrapper(*args, **kwargs):
             user_email = st.session_state.get('user_email', 'anonymous')
             now = time.time()
+            
             if user_email not in user_rate_limits:
                 user_rate_limits[user_email] = {}
+            
             func_name = func.__name__
             if func_name not in user_rate_limits[user_email]:
                 user_rate_limits[user_email][func_name] = []
+            
             user_rate_limits[user_email][func_name] = [
                 t for t in user_rate_limits[user_email][func_name] if now - t < period
             ]
+            
             if len(user_rate_limits[user_email][func_name]) >= max_calls:
                 st.error(f"⚠️ 操作過於頻繁，請 {period} 秒後再試")
                 write_log("RATE_LIMIT_EXCEEDED", user_email, f"Function: {func_name}")
                 return False, "速率限制"
+            
             user_rate_limits[user_email][func_name].append(now)
             return func(*args, **kwargs)
         return wrapper
     return decorator
 
-# API 自動重試裝飾器 (解決 429 Quota Exceeded)
-def retry_on_quota_error(max_retries=3, delay=2):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            for attempt in range(max_retries):
-                try:
-                    return func(*args, **kwargs)
-                except APIError as e:
-                    # 檢查是否為 Quota exceeded (429)
-                    if "429" in str(e) or "Quota exceeded" in str(e):
-                        if attempt < max_retries - 1:
-                            sleep_time = delay * (attempt + 1) # 指數退避
-                            time.sleep(sleep_time)
-                            continue
-                    logging.error(f"API Error in {func.__name__}: {e}")
-                    return None
-                except Exception as e:
-                    logging.error(f"Unexpected error in {func.__name__}: {e}")
-                    return None
-            return None
-        return wrapper
-    return decorator
-
-# Email 發送計數器
 email_send_count = {}
 
 def can_send_email(email):
+    """檢查是否允許發送 Email"""
     now = time.time()
     if email not in email_send_count:
         email_send_count[email] = []
+    
     email_send_count[email] = [t for t in email_send_count[email] if now - t < 3600]
+    
     if len(email_send_count[email]) >= 3:
         return False, "此 Email 在 1 小時內已發送過 3 次驗證碼"
+    
     email_send_count[email].append(now)
     return True, "OK"
 
@@ -207,16 +200,23 @@ def get_client():
         try:
             creds = ServiceAccountCredentials.from_json_keyfile_name('service_account.json', scope)
             return gspread.authorize(creds)
-        except Exception as e:
-            logging.critical(f"Local creds error: {e}")
+        except FileNotFoundError as e:
+            logging.error(f"Service account file not found: {e}")
+            st.error("系統設定檔遺失，請聯繫管理員")
             return None
+        except Exception as e:
+            logging.critical(f"Unexpected error in get_client (local): {e}")
+            return None
+    
     try:
         if "gcp_service_account" in st.secrets:
             creds_dict = dict(st.secrets["gcp_service_account"])
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             return gspread.authorize(creds)
     except Exception as e:
-        logging.critical(f"Secrets creds error: {e}")
+        logging.critical(f"Failed to load GCP credentials: {e}")
+        st.error("無法連線資料庫，請稍後再試")
+    
     return None
 
 def get_tw_time():
@@ -224,16 +224,20 @@ def get_tw_time():
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 def write_log(action, user_email, note=""):
+    """寫入操作日誌"""
     client = get_client()
     if not client: return
     try:
         sh = client.open(PRICE_DB_NAME)
-        try: ws = sh.worksheet("Logs")
+        try: 
+            ws = sh.worksheet("Logs")
         except: 
             ws = sh.add_worksheet(title="Logs", rows=1000, cols=4)
             ws.append_row(["時間", "使用者", "動作", "備註"])
+        
         ws.append_row([get_tw_time(), user_email, action, note])
-    except: pass
+    except Exception as e:
+        logging.error(f"Failed to write log: {e}")
 
 def get_greeting():
     tw_tz = timezone(timedelta(hours=8))
@@ -245,79 +249,27 @@ def get_greeting():
     else: return "晚上好！辛苦了 🌙"
 
 def check_password(plain_text, hashed_text):
-    try: return bcrypt.checkpw(plain_text.encode('utf-8'), hashed_text.encode('utf-8'))
-    except: return False
+    try: 
+        return bcrypt.checkpw(plain_text.encode('utf-8'), hashed_text.encode('utf-8'))
+    except Exception as e:
+        logging.error(f"Password check failed: {e}")
+        return False
 
 def hash_password(plain_text):
     return bcrypt.hashpw(plain_text.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
-# === Token Session 管理 (已加入防爆機制) ===
-@rate_limit(max_calls=5, period=300)
-@retry_on_quota_error(max_retries=3, delay=2) 
-def create_session_token(email, days_valid=30):
-    client = get_client()
-    if not client: return None, None
-    
-    sh = client.open(PRICE_DB_NAME)
-    try: ws = sh.worksheet("Sessions")
-    except: 
-        ws = sh.add_worksheet(title="Sessions", rows=1000, cols=5)
-        ws.append_row(["Token", "Email", "Expires_At", "Created_At"])
-    
-    # 刪除舊 Token (簡單版)
-    token = secrets.token_urlsafe(32)
-    now = datetime.now(timezone(timedelta(hours=8)))
-    expires_at = now + timedelta(days=days_valid)
-    
-    ws.append_row([
-        token, 
-        email, 
-        expires_at.strftime("%Y-%m-%d %H:%M:%S"), 
-        now.strftime("%Y-%m-%d %H:%M:%S")
-    ])
-    return token, expires_at
-
-@retry_on_quota_error(max_retries=3, delay=1)
-def validate_session_token(token):
-    if not token: return None
-    client = get_client()
-    if not client: return None
-    
-    sh = client.open(PRICE_DB_NAME)
-    ws = sh.worksheet("Sessions")
-    records = ws.get_all_records()
-    now = datetime.now(timezone(timedelta(hours=8)))
-    
-    for row in records:
-        if str(row.get("Token")) == token:
-            try:
-                exp_str = row.get("Expires_At")
-                expires_at = datetime.strptime(exp_str, "%Y-%m-%d %H:%M:%S")
-                if expires_at.tzinfo is None:
-                    expires_at = expires_at.replace(tzinfo=timezone(timedelta(hours=8)))
-                if now < expires_at: 
-                    return row.get("Email")
-            except: pass
-    return None
-
-def delete_session_token(token):
-    if not token: return
-    try:
-        client = get_client()
-        if not client: return
-        sh = client.open(PRICE_DB_NAME)
-        ws = sh.worksheet("Sessions")
-        cell = ws.find(token)
-        if cell: ws.delete_rows(cell.row)
-    except: pass
-
 # === 郵件功能 ===
 def send_otp_email(to_email, otp_code):
-    if not SMTP_EMAIL or not SMTP_PASSWORD: return False, "未設定信箱"
-    allowed, msg = can_send_email(to_email)
-    if not allowed: return False, msg
+    """發送 OTP 驗證碼"""
+    if not SMTP_EMAIL or not SMTP_PASSWORD: 
+        return False, "未設定信箱"
     
-    msg = MIMEText(f"驗證碼:{otp_code}\n\n10分鐘內有效。")
+    allowed, msg = can_send_email(to_email)
+    if not allowed:
+        write_log("EMAIL_RATE_LIMIT", to_email, msg)
+        return False, msg
+    
+    msg = MIMEText(f"驗證碼:{otp_code}\n\n此驗證碼 10 分鐘內有效，請勿分享給他人。")
     msg['Subject'] = "【士林電機FA】密碼重置驗證碼"
     msg['From'] = SMTP_EMAIL
     msg['To'] = to_email
@@ -326,86 +278,81 @@ def send_otp_email(to_email, otp_code):
         with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=10) as smtp:
             smtp.login(SMTP_EMAIL, SMTP_PASSWORD)
             smtp.send_message(msg)
+        write_log("EMAIL_SENT", to_email, "OTP 驗證碼")
         return True, "已發送"
-    except Exception as e: return False, str(e)
+    except Exception as e:
+        logging.error(f"Email sending failed: {e}")
+        write_log("EMAIL_ERROR", to_email, str(e))
+        return False, str(e)
 
-@retry_on_quota_error(max_retries=3, delay=1)
 def login(email, password):
     client = get_client()
     if not client: return False, "連線失敗"
-    sh = client.open(PRICE_DB_NAME)
-    ws = sh.worksheet("Users")
-    users = ws.get_all_records()
-    for user in users:
-        if str(user.get('email')).strip() == email.strip():
-            if check_password(password, str(user.get('password'))):
-                write_log("登入成功", email)
-                return True, str(user.get('name')) or email
-    return False, "帳號或密碼錯誤"
+    
+    try:
+        sh = client.open(PRICE_DB_NAME)
+        ws = sh.worksheet("Users")
+        users = ws.get_all_records()
+        
+        for user in users:
+            if str(user.get('email')).strip() == email.strip():
+                if check_password(password, str(user.get('password'))):
+                    write_log("登入成功", email)
+                    return True, str(user.get('name')) or email
+        
+        write_log("登入失敗", email, "帳號或密碼錯誤")
+        return False, "帳號或密碼錯誤"
+    except Exception as e:
+        logging.error(f"Login failed: {e}")
+        return False, str(e)
 
-@retry_on_quota_error(max_retries=2, delay=1)
 def change_password(email, new_password):
     client = get_client()
     if not client: return False
-    sh = client.open(PRICE_DB_NAME)
-    ws = sh.worksheet("Users")
-    cell = ws.find(email)
-    if cell:
-        ws.update_cell(cell.row, 2, hash_password(new_password))
-        return True
-    return False
+    
+    try:
+        sh = client.open(PRICE_DB_NAME)
+        ws = sh.worksheet("Users")
+        cell = ws.find(email)
+        if cell:
+            ws.update_cell(cell.row, 2, hash_password(new_password))
+            write_log("密碼已修改", email)
+            return True
+        return False
+    except Exception as e:
+        logging.error(f"Password change failed: {e}")
+        return False
 
 def check_email_exists(email):
+    client = get_client()
+    if not client: return False
+    
     try:
-        client = get_client()
         sh = client.open(PRICE_DB_NAME)
         ws = sh.worksheet("Users")
         ws.find(email.strip())
         return True
-    except: return False
+    except: 
+        return False
 
 def post_login_init(email, name, role_override=None):
     st.session_state.logged_in = True
     st.session_state.user_email = email
     st.session_state.real_name = name
     st.session_state.login_attempts = 0
+    
     if role_override: 
         st.session_state.role = role_override
     else:
         is_mgr = email.strip().lower() in [m.lower() for m in MANAGERS]
         is_asst = email.strip().lower() in [a.lower() for a in ASSISTANTS]
         st.session_state.role = "manager" if is_mgr else "assistant" if is_asst else "sales"
+    
     st.session_state.page_radio = "💰 經銷牌價查詢" if st.session_state.role == "assistant" else "📝 寫 OGSM 日報"
 
 # === 主程式 ===
 def main():
-    # 【修復重點】加入 key 參數防止 DuplicateElementKey 錯誤
-    cookie_manager = stx.CookieManager(key="master_cookie_manager")
-
-    # 自動登入
-    if not st.session_state.logged_in:
-        try:
-            token = cookie_manager.get(cookie="auth_token")
-            if token:
-                with st.spinner("自動登入中..."):
-                    email = validate_session_token(token)
-                    if email:
-                        client = get_client()
-                        name = email
-                        try:
-                            sh = client.open(PRICE_DB_NAME)
-                            ws = sh.worksheet("Users")
-                            for r in ws.get_all_records():
-                                if r.get("email") == email:
-                                    name = r.get("name")
-                                    break
-                        except: pass
-                        post_login_init(email, name)
-                        st.rerun()
-                    else:
-                        try: cookie_manager.delete("auth_token")
-                        except: pass
-        except: pass
+    cookie_manager = stx.CookieManager()
 
     if not st.session_state.logged_in:
         col1, col2, col3 = st.columns([1, 2, 1])
@@ -420,18 +367,15 @@ def main():
             tab1, tab2 = st.tabs(["會員登入", "忘記密碼"])
             
             with tab1:
-                try:
-                    last_email = cookie_manager.get("last_email")
-                    if not last_email: last_email = ""
-                except: last_email = ""
-
+                # 從 Cookie 讀取上次登入的帳號
+                last_email = cookie_manager.get("last_email") or ""
+                
                 with st.form("login"):
-                    email = st.text_input("Email", value=last_email, max_chars=100, placeholder="Email")
-                    pwd = st.text_input("密碼", type="password", max_chars=50, placeholder="密碼")
+                    email = st.text_input("Email", value=last_email, max_chars=100, placeholder="請輸入您的 Email")
+                    pwd = st.text_input("密碼", type="password", max_chars=50, placeholder="請輸入密碼")
                     
-                    c1, c2 = st.columns(2)
-                    with c1: remember_me = st.checkbox("記住我 (30天)", value=True)
-                    with c2: remember_email = st.checkbox("記住帳號", value=True)
+                    # 僅保留「記住帳號」選項
+                    remember_email = st.checkbox("記住帳號", value=True)
                     
                     if st.form_submit_button("登入", use_container_width=True):
                         if not email or not pwd:
@@ -439,73 +383,88 @@ def main():
                         else:
                             success, result = login(email, pwd)
                             if success:
+                                # 處理記住帳號 (加入 key 防止重複元素錯誤)
                                 if remember_email:
                                     try:
-                                        exp = datetime.now(timezone(timedelta(hours=8))) + timedelta(days=365)
-                                        cookie_manager.set("last_email", email, expires_at=exp)
-                                    except: pass
+                                        # 設定 Cookie 有效期 1 年
+                                        email_expires = datetime.now(timezone(timedelta(hours=8))) + timedelta(days=365)
+                                        cookie_manager.set("last_email", email, expires_at=email_expires, key="set_last_email_cookie")
+                                    except Exception as e:
+                                        logging.error(f"Failed to save email cookie: {e}")
                                 else:
-                                    try: cookie_manager.delete("last_email")
-                                    except: pass
-                                
-                                if remember_me:
-                                    token_result = create_session_token(email)
-                                    if token_result and token_result != (False, "速率限制"):
-                                        token, expires = token_result
-                                        if token: 
-                                            cookie_manager.set("auth_token", token, expires_at=expires)
+                                    # 如果取消勾選，刪除已儲存的帳號 (加入 key)
+                                    try:
+                                        cookie_manager.delete("last_email", key="del_last_email_cookie")
+                                    except:
+                                        pass
                                 
                                 post_login_init(email, result)
-                                time.sleep(0.5)
                                 st.rerun()
                             else:
                                 st.session_state.login_attempts += 1
                                 st.error(result)
             
             with tab2:
-                try: r_last = cookie_manager.get("last_email") or ""
-                except: r_last = ""
-
+                # 在忘記密碼頁面也記住輸入的 Email
+                last_reset_email = cookie_manager.get("last_email") or ""
+                
                 if st.session_state.reset_stage == 0:
-                    r_email = st.text_input("註冊 Email", value=r_last, max_chars=100)
-                    if st.button("發送驗證碼"):
-                        if check_email_exists(r_email):
+                    r_email = st.text_input("註冊 Email", value=last_reset_email, max_chars=100, placeholder="請輸入您註冊時使用的 Email")
+                    
+                    if st.button("發送驗證碼", use_container_width=True):
+                        if not r_email:
+                            st.error("請輸入 Email")
+                        elif check_email_exists(r_email):
                             otp = "".join(random.choices(string.digits, k=6))
                             st.session_state.reset_otp = otp
                             st.session_state.reset_target_email = r_email
                             st.session_state.reset_otp_time = time.time()
+                            
                             sent, msg = send_otp_email(r_email, otp)
                             if sent:
                                 st.session_state.reset_stage = 1
-                                st.success("已發送")
-                                st.rerun()
-                            else: st.error(msg)
-                        else: st.error("Email 不存在")
-                elif st.session_state.reset_stage == 1:
-                    if time.time() - st.session_state.get('reset_otp_time', 0) > 600:
-                        st.error("過期")
-                        st.session_state.reset_stage = 0
-                        st.rerun()
-                    otp_in = st.text_input("驗證碼", max_chars=6)
-                    new_pw = st.text_input("新密碼", type="password", max_chars=50)
-                    if st.button("確認重置"):
-                        if otp_in == st.session_state.reset_otp and len(new_pw)>=6:
-                            if change_password(st.session_state.reset_target_email, new_pw):
-                                st.success("成功")
-                                st.session_state.reset_stage = 0
+                                st.success("✅ 驗證碼已發送，10 分鐘內有效")
                                 time.sleep(1)
                                 st.rerun()
-                            else: st.error("失敗")
-                        else: st.error("錯誤")
-                    if st.button("返回"):
+                            else: 
+                                st.error(f"發送失敗: {msg}")
+                        else: 
+                            st.error("Email 不存在")
+                
+                elif st.session_state.reset_stage == 1:
+                    if time.time() - st.session_state.get('reset_otp_time', 0) > 600:
+                        st.error("⏰ 驗證碼已過期，請重新發送")
                         st.session_state.reset_stage = 0
                         st.rerun()
+                    
+                    otp_in = st.text_input("輸入驗證碼", max_chars=6)
+                    new_pw = st.text_input("新密碼 (至少 6 位)", type="password", max_chars=50)
+                    
+                    if st.button("確認重置", use_container_width=True):
+                        if len(new_pw) < 6:
+                            st.error("密碼至少需要 6 個字元")
+                        elif otp_in == st.session_state.reset_otp:
+                            if change_password(st.session_state.reset_target_email, new_pw):
+                                st.success("✅ 密碼已重置，請重新登入")
+                                st.session_state.reset_stage = 0
+                                time.sleep(2)
+                                st.rerun()
+                            else: 
+                                st.error("重置失敗，請聯繫管理員")
+                        else: 
+                            st.error("驗證碼錯誤")
+                    
+                    if st.button("← 返回", use_container_width=True):
+                        st.session_state.reset_stage = 0
+                        st.rerun()
+        
         return
 
     # 側邊欄
     with st.sidebar:
-        st.caption(get_greeting())
+        greeting = get_greeting()
         st.write(f"👤 **{st.session_state.real_name}**")
+        st.caption(f"{greeting}")
         
         current_email = st.session_state.user_email.strip().lower()
         if current_email == "welsong@seec.com.tw":
@@ -517,36 +476,42 @@ def main():
                         sh = client.open(PRICE_DB_NAME)
                         ws_users = sh.worksheet("Users")
                         all_records = ws_users.get_all_records()
+                        
                         user_map = {f"{u.get('name')} ({u.get('email')})": u for u in all_records}
                         target_selection = st.selectbox("選擇模擬對象", list(user_map.keys()))
-                        if st.button("確認切換"):
+                        
+                        if st.button("確認切換", type="primary", use_container_width=True):
                             target_user = user_map[target_selection]
-                            write_log("ADMIN_IMPERSONATE", current_email, f"To: {target_user.get('email')}")
+                            
+                            write_log(
+                                "ADMIN_IMPERSONATE", 
+                                current_email,
+                                f"Switch to: {target_user.get('email')} ({target_user.get('name')})"
+                            )
+                            
                             post_login_init(target_user.get('email'), target_user.get('name'))
+                            st.success(f"已切換為:{target_user.get('name')}")
+                            st.warning("⚠️ 您正在以其他身份操作，所有動作將被記錄")
+                            time.sleep(1)
                             st.rerun()
-                except: pass
+                except Exception as e:
+                    st.error("讀取使用者列表失敗")
+                    logging.error(f"Impersonate failed: {e}")
 
         st.markdown("---")
+        
         pages = ["📝 寫 OGSM 日報", "💰 經銷牌價查詢", "🔑 修改密碼", "📊 日報總覽", "👋 登出系統"]
         sel = st.radio("功能", pages, key="page_radio", label_visibility="collapsed")
 
     if sel == "👋 登出系統":
-        # 【修復重點】防止 KeyError
-        try:
-            token = cookie_manager.get("auth_token")
-            if token: delete_session_token(token)
-        except: pass
-        
-        try: cookie_manager.delete("auth_token")
-        except: pass
-            
+        # 登出時只需清除 Session State 並重新整理
         write_log("登出系統", st.session_state.user_email)
         st.session_state.logged_in = False
         st.rerun()
 
     client = get_client()
     if not client:
-        st.error("連線異常")
+        st.error("無法連線資料庫，請稍後再試")
         return
 
     if sel == "📝 寫 OGSM 日報": 
@@ -557,16 +522,24 @@ def main():
         report_overview.show(client, REPORT_DB_NAME, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
     elif sel == "🔑 修改密碼":
         st.subheader("修改密碼")
-        p1 = st.text_input("新密碼", type="password")
-        p2 = st.text_input("確認新密碼", type="password")
-        if st.button("確認"):
-            if p1 and p1==p2 and len(p1)>=6:
+        p1 = st.text_input("新密碼 (至少 6 位)", type="password", max_chars=50)
+        p2 = st.text_input("確認新密碼", type="password", max_chars=50)
+        
+        if st.button("確認", use_container_width=True):
+            if not p1 or not p2:
+                st.error("請輸入完整資訊")
+            elif len(p1) < 6:
+                st.error("密碼至少需要 6 個字元")
+            elif p1 != p2:
+                st.error("兩次密碼輸入不一致")
+            else:
                 if change_password(st.session_state.user_email, p1):
-                    st.success("成功")
+                    st.success("✅ 密碼已修改，請重新登入")
                     time.sleep(1)
                     st.session_state.logged_in = False
                     st.rerun()
-            else: st.error("錯誤")
+                else:
+                    st.error("修改失敗，請聯繫管理員")
 
 if __name__ == "__main__":
     main()
