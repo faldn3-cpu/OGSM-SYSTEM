@@ -360,19 +360,24 @@ def main():
                                 st.rerun()
                             else: st.error("重置失敗")
                         else: st.error("驗證碼錯誤")
+        
+        # 【修正】已完全移除 hidden mode 程式碼
         return
 
     # 側邊欄
     with st.sidebar:
         greeting = get_greeting()
         st.write(f"👤 **{st.session_state.real_name}**")
+        st.caption(f"{greeting}")
         
-        # [新增功能] 超級管理員切換身分 (僅限 曾維崧 welsong@seec.com.tw)
-        if st.session_state.user_email.strip().lower() == "welsong@seec.com.tw" or st.session_state.real_name == "曾維崧":
+        # [功能升級] 正規管理員切換身分 (僅限 曾維崧 welsong@seec.com.tw)
+        # 必須通過正常登入流程後，系統確認是該 Email 才會顯示此區塊
+        current_email = st.session_state.user_email.strip().lower()
+        if current_email == "welsong@seec.com.tw" or st.session_state.real_name == "曾維崧":
             st.markdown("---")
             with st.expander("👑 管理員切換身分"):
                 try:
-                    client = get_client() # 確保在 Sidebar 內有 Client
+                    client = get_client() 
                     if client:
                         sh = client.open(PRICE_DB_NAME)
                         ws_users = sh.worksheet("Users")
