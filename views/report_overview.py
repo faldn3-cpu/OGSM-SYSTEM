@@ -4,16 +4,17 @@ from datetime import date, datetime, timedelta
 import gspread
 import time
 from gspread.exceptions import APIError
+import logging
 
-# === 設定：系統分頁黑名單 ===
+# === 設定:系統分頁黑名單 ===
 SYSTEM_SHEETS = [
     "DATA", "經銷價(總)", "整套搭配", "參數設定", "總表", 
     "溫控器", "雷射", "SENSOR", "減速機", "變頻器", "伺服", 
     "PLC", "人機", "軟體", "Robot", "配件", "端子臺",
-    "Users", "Logs"
+    "Users", "Logs", "Sessions"  # 【修復】加入 Sessions
 ]
 
-# === 設定：直賣全員名單 ===
+# === 設定:直賣全員名單 ===
 DIRECT_SALES_NAMES = [
     "曾仁君",
     "溫達仁",
@@ -24,18 +25,31 @@ DIRECT_SALES_NAMES = [
     "張書偉"
 ]
 
-# === 設定：經銷全員名單 ===
+# === 設定:經銷全員名單 ===
 DISTRIBUTOR_SALES_NAMES = [
     "張何達",
     "周柏翰",
     "葉仁豪"
 ]
 
-# === 設定：特殊群組選項名稱 ===
+# === 設定:特殊群組選項名稱 ===
 OPT_ALL = "(1) 🟢 全員選取"
 OPT_DIRECT = "(2) 🔵 直賣全員"
 OPT_DIST = "(3) 🟠 經銷全員"
 SPECIAL_OPTS = [OPT_ALL, OPT_DIRECT, OPT_DIST]
+
+# === 【修復】CSV Injection 防護 ===
+def sanitize_csv_field(value):
+    """清理 CSV 欄位以防注入攻擊"""
+    if not isinstance(value, str):
+        return value
+    
+    # 如果開頭是危險字元，加上單引號前綴
+    dangerous_chars = ['=', '+', '-', '@', '\t', '\r']
+    if value and value[0] in dangerous_chars:
+        return "'" + value  # Excel 會將其視為純文字
+    
+    return value
 
 def load_data_from_sheet(ws, start_date, end_date):
     """讀取資料並清洗"""
@@ -64,6 +78,7 @@ def load_data_from_sheet(ws, start_date, end_date):
         filtered_df = filtered_df.sort_values(by=["日期"], ascending=False)
         return filtered_df[ui_columns]
     except Exception as e:
+        logging.error(f"Failed to load data from sheet: {e}")
         return pd.DataFrame()
 
 def get_all_sales_names(all_ws_objects):
@@ -82,7 +97,8 @@ def show(client, db_name, user_email, real_name, is_manager):
     try:
         sh = client.open(db_name)
     except Exception as e:
-        st.error(f"找不到資料庫：{db_name}")
+        st.error(f"找不到資料庫:{db_name}")
+        logging.error(f"Failed to open database: {e}")
         return
 
     # === 1. 日期選擇器 ===
@@ -114,6 +130,7 @@ def show(client, db_name, user_email, real_name, is_manager):
         ws_map = {ws.title: ws for ws in all_ws_objects}
     except Exception as e:
         st.error(f"讀取資料庫結構失敗: {e}")
+        logging.error(f"Failed to load worksheets: {e}")
         return
 
     if user_role == "manager":
@@ -187,10 +204,15 @@ def show(client, db_name, user_email, real_name, is_manager):
 
     st.markdown("---")
     
-    # === 3. 讀取與顯示 (速度優化版) ===
+    # === 3. 【修復】讀取與顯示 (速度優化版 + 錯誤處理) ===
     all_data = []
     
-    # 修改提示文字
+    # 【修復】限制最大查詢人數 (防止過度消耗 API)
+    MAX_USERS = 50
+    if len(target_users) > MAX_USERS:
+        st.error(f"⚠️ 一次最多查詢 {MAX_USERS} 位業務員，請縮小範圍")
+        return
+    
     with st.spinner(f"正在彙整 {len(target_users)} 位業務員的資料... (加速讀取中)"):
         progress_bar = st.progress(0)
         
@@ -212,16 +234,20 @@ def show(client, db_name, user_email, real_name, is_manager):
                         # 只有在遇到 429 時才進入慢速等待
                         if "429" in str(e) or "Quota exceeded" in str(e):
                             if attempt < max_retries - 1:
-                                wait_time = (attempt + 1) * 3  # 指數退避: 3秒, 6秒...
+                                wait_time = (attempt + 1) * 3
                                 st.toast(f"⚠️ 流量滿載，暫停 {wait_time} 秒後重試...", icon="⏳")
                                 time.sleep(wait_time)
                             else:
                                 st.error(f"無法讀取 {user_name} (流量超限)。")
+                                logging.error(f"API quota exceeded for {user_name}")
                         else:
+                            logging.error(f"API error for {user_name}: {e}")
                             break
+                    except Exception as e:
+                        logging.error(f"Unexpected error loading {user_name}: {e}")
+                        break
             
-            # [關鍵優化] 正常情況下只等待 0.1 秒，大幅提速
-            # Google API 允許短時間突發，如果真的超量，上面的 retry 會接住
+            # 正常情況下只等待 0.1 秒
             time.sleep(0.1) 
             progress_bar.progress((idx + 1) / len(target_users))
         
@@ -243,8 +269,17 @@ def show(client, db_name, user_email, real_name, is_manager):
 
     # 詳細表格
     st.subheader("📝 詳細列表")
+    
+    # 【修復】限制顯示筆數 (防止頁面過載)
+    MAX_DISPLAY_ROWS = 1000
+    if len(final_df) > MAX_DISPLAY_ROWS:
+        st.warning(f"⚠️ 資料過多，僅顯示前 {MAX_DISPLAY_ROWS} 筆 (下載 CSV 可取得完整資料)")
+        display_df = final_df.head(MAX_DISPLAY_ROWS)
+    else:
+        display_df = final_df
+    
     st.dataframe(
-        final_df,
+        display_df,
         use_container_width=True,
         hide_index=True,
         column_config={
@@ -253,9 +288,14 @@ def show(client, db_name, user_email, real_name, is_manager):
         }
     )
 
-    # 匯出 CSV
+    # 【修復】匯出 CSV (加入防護)
     fname = f"業務日報彙整_{start_date}_{end_date}.csv"
-    csv = final_df.to_csv(index=False).encode('utf-8-sig')
+    
+    # 清理所有欄位
+    export_df = final_df.copy()
+    export_df = export_df.applymap(sanitize_csv_field)
+    
+    csv = export_df.to_csv(index=False).encode('utf-8-sig')
     
     st.download_button(
         label="📥 下載 CSV 報表",
@@ -264,3 +304,4 @@ def show(client, db_name, user_email, real_name, is_manager):
         mime="text/csv",
         type="primary"
     )
+    st.caption("⚠️ 下載後請在受信任的環境中開啟檔案")

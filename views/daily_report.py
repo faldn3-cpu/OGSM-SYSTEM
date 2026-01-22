@@ -3,7 +3,43 @@ from datetime import date, datetime, timezone, timedelta
 import pandas as pd
 import gspread 
 import time
+from functools import wraps
+import logging
 
+# ==========================================
+#  安全性設定：速率限制
+# ==========================================
+save_rate_limits = {}
+
+def rate_limit_save(max_calls=5, period=60):
+    """針對儲存操作的速率限制 (每分鐘最多 5 次)"""
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            user_email = st.session_state.get('user_email', 'anonymous')
+            now = time.time()
+            
+            if user_email not in save_rate_limits:
+                save_rate_limits[user_email] = []
+            
+            # 清除過期記錄
+            save_rate_limits[user_email] = [
+                t for t in save_rate_limits[user_email] if now - t < period
+            ]
+            
+            if len(save_rate_limits[user_email]) >= max_calls:
+                st.error(f"⚠️ 儲存過於頻繁，請 {period} 秒後再試")
+                logging.warning(f"Rate limit exceeded for {user_email} on {func.__name__}")
+                return False, "速率限制"
+            
+            save_rate_limits[user_email].append(now)
+            return func(*args, **kwargs)
+        return wrapper
+    return decorator
+
+# ==========================================
+#  工具函式
+# ==========================================
 def get_tw_time():
     tw_tz = timezone(timedelta(hours=8))
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
@@ -24,7 +60,8 @@ def get_or_create_user_sheet(client, db_name, real_name):
     try:
         sh = client.open(db_name)
     except Exception as e:
-        st.error(f"找不到 Google Sheet：{db_name}")
+        st.error(f"找不到 Google Sheet:{db_name}")
+        logging.error(f"Failed to open sheet: {e}")
         return None
 
     HEADERS = ["項次", "日期", "星期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]
@@ -36,8 +73,10 @@ def get_or_create_user_sheet(client, db_name, real_name):
         try:
             ws = sh.add_worksheet(title=real_name, rows=1000, cols=10)
             ws.append_row(HEADERS)
+            logging.info(f"Created new worksheet for {real_name}")
             return ws
-        except Exception:
+        except Exception as e:
+            logging.error(f"Failed to create worksheet: {e}")
             return None
 
 def load_data_by_range(ws, start_date, end_date):
@@ -49,6 +88,7 @@ def load_data_by_range(ws, start_date, end_date):
         df = pd.DataFrame(data)
         if "項次" in df.columns: df = df.drop(columns=["項次"])
         df = df.fillna("")
+        
         for col in ["客戶名稱", "工作內容", "實際行程", "客戶分類", "最後更新時間"]:
             if col in df.columns: df[col] = df[col].astype(str)
 
@@ -58,9 +98,11 @@ def load_data_by_range(ws, start_date, end_date):
         
         display_df = filtered_df[ui_columns].copy() if not filtered_df.empty else pd.DataFrame(columns=ui_columns)
         return display_df, df 
-    except:
+    except Exception as e:
+        logging.error(f"Failed to load data: {e}")
         return pd.DataFrame(columns=["日期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]), pd.DataFrame()
 
+@rate_limit_save(max_calls=5, period=60)  # 【修復】加入速率限制
 def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
     """將目前的 DataFrame 完整存回 Google Sheet"""
     try:
@@ -68,7 +110,7 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
         current_df["日期"] = pd.to_datetime(current_df["日期"], errors='coerce').dt.date
         current_df = current_df.dropna(subset=["日期"])
         current_df["星期"] = current_df["日期"].apply(lambda x: get_weekday_str(x))
-        current_df["最後更新時間"] = get_tw_time() # 強制更新時間
+        current_df["最後更新時間"] = get_tw_time()
         
         # 2. 整理 all_df (保留區間外的資料)
         if not all_df.empty and "日期" in all_df.columns:
@@ -78,7 +120,7 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
         else:
             remaining_df = pd.DataFrame()
 
-        # 3. 合併 (注意：這裡會自動忽略 current_df 中的額外欄位如 '選取')
+        # 3. 合併 (自動忽略 current_df 中的額外欄位如 '選取')
         final_df = pd.concat([remaining_df, current_df], ignore_index=True)
         final_df = final_df.sort_values(by=["日期"], ascending=True)
 
@@ -86,7 +128,7 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
         if "項次" in final_df.columns: final_df = final_df.drop(columns=["項次"])
         final_df.insert(0, "項次", range(1, len(final_df) + 1))
 
-        # 5. 確保欄位順序 (這裡會排除 '選取' 欄位，確保資料庫乾淨)
+        # 5. 確保欄位順序 (排除 '選取' 欄位)
         cols_order = ["項次", "日期", "星期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]
         for c in cols_order:
             if c not in final_df.columns: final_df[c] = ""
@@ -99,10 +141,29 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
         val_list = [final_df.columns.values.tolist()] + final_df.values.tolist()
         ws.clear()
         ws.update(values=val_list, range_name='A1')
+        
+        logging.info(f"Data saved successfully: {len(final_df)} rows")
         return True, "儲存成功"
     except Exception as e:
+        logging.error(f"Save failed: {e}")
         return False, str(e)
 
+# ==========================================
+#  輸入驗證與清理
+# ==========================================
+MAX_FIELD_LENGTH = 5000  # 最大字元數
+
+def sanitize_input(text, max_length=MAX_FIELD_LENGTH):
+    """清理使用者輸入 (防止超長字串與惡意內容)"""
+    if not text: return ""
+    text = str(text).strip()
+    if len(text) > max_length:
+        return text[:max_length]
+    return text
+
+# ==========================================
+#  主顯示函式
+# ==========================================
 def show(client, db_name, user_email, real_name):
     st.title(f"📝 {real_name} 的業務日報")
     ws = get_or_create_user_sheet(client, db_name, real_name)
@@ -111,7 +172,7 @@ def show(client, db_name, user_email, real_name):
     today = date.today()
     def_start, def_end = get_default_range(today)
     
-    # 手機版面優化：將日期選擇收合
+    # 手機版面優化:將日期選擇收合
     with st.expander("📅 切換資料日期區間", expanded=False):
         date_range = st.date_input("選擇區間", (def_start, def_end))
     
@@ -122,20 +183,18 @@ def show(client, db_name, user_email, real_name):
     # 載入資料
     current_df, all_df = load_data_by_range(ws, start_date, end_date)
 
-    # === [功能升級] 加入「選取」欄位用於勾選發送 ===
+    # === 【修復】加入「選取」欄位用於勾選傳送 ===
     if not current_df.empty:
-        # 1. 插入「選取」欄位到第一欄
         current_df.insert(0, "選取", False)
-        # 2. 智慧預設：自動勾選「今天」的項目
-        # 如果日期欄位是字串，先轉成 date 物件比較
+        # 智慧預設:自動勾選「今天」的項目
         try:
             date_col = pd.to_datetime(current_df["日期"]).dt.date
             current_df.loc[date_col == today, "選取"] = True
         except:
-            pass # 如果轉換失敗就不預設
+            pass
 
     # ==========================================
-    #  Part 1: 賈伯斯模式 - 新增工作 (Mobile First)
+    #  Part 1: 新增工作 (Mobile First)
     # ==========================================
     st.markdown("### ➕ 新增工作")
     
@@ -149,13 +208,21 @@ def show(client, db_name, user_email, real_name):
                 index=0
             )
         
-        inp_client = st.text_input("客戶名稱", placeholder="輸入客戶名稱...")
-        inp_content = st.text_area("工作內容", placeholder="輸入預計行程或今日重點...", height=100)
-        inp_result = st.text_area("實際行程", placeholder="輸入實際執行結果...", height=100)
+        inp_client = st.text_input("客戶名稱", placeholder="輸入客戶名稱...", max_chars=MAX_FIELD_LENGTH)
+        inp_content = st.text_area("工作內容", placeholder="輸入預計行程或今日重點 (上限 5000 字)...", height=100, max_chars=MAX_FIELD_LENGTH)
+        inp_result = st.text_area("實際行程", placeholder="輸入實際執行結果 (上限 5000 字)...", height=100, max_chars=MAX_FIELD_LENGTH)
 
         if st.button("➕ 加入清單", type="primary", use_container_width=True):
+            # 【修復】驗證輸入
+            inp_client = sanitize_input(inp_client)
+            inp_content = sanitize_input(inp_content)
+            inp_result = sanitize_input(inp_result)
+            
             if not inp_client:
                 st.warning("⚠️ 請輸入客戶名稱")
+            elif len(inp_content) > MAX_FIELD_LENGTH or len(inp_result) > MAX_FIELD_LENGTH:
+                st.error(f"⚠️ 單一欄位不可超過 {MAX_FIELD_LENGTH} 字元")
+                logging.warning(f"Input too long from {user_email}: Content={len(inp_content)}, Result={len(inp_result)}")
             else:
                 new_row = pd.DataFrame([{
                     "日期": inp_date,
@@ -165,8 +232,6 @@ def show(client, db_name, user_email, real_name):
                     "實際行程": inp_result,
                     "最後更新時間": get_tw_time()
                 }])
-                # 這裡不需加入 "選取" 欄位，因為 concat 後，pandas 會自動處理缺失欄位 (fillna)
-                # 重新載入時會自動補上預設值
                 
                 # 合併到當前顯示的 DataFrame (先移除選取欄位以免干擾儲存)
                 if "選取" in current_df.columns:
@@ -179,9 +244,11 @@ def show(client, db_name, user_email, real_name):
                 with st.spinner("正在儲存..."):
                     success, msg = save_to_google_sheet(ws, all_df, df_to_save, start_date, end_date)
                     if success:
-                        st.success("✅ 已新增並儲存！")
+                        st.success("✅ 已新增並儲存!")
                         time.sleep(1)
                         st.rerun()
+                    elif msg == "速率限制":
+                        pass  # 錯誤訊息已在 decorator 中顯示
                     else:
                         st.error(f"儲存失敗: {msg}")
 
@@ -191,7 +258,6 @@ def show(client, db_name, user_email, real_name):
     st.write("")
     st.subheader(f"📋 工作清單 ({start_date} ~ {end_date})")
     
-    # 使用者可以在這裡勾選要傳送的項目
     edited_df = st.data_editor(
         current_df,
         num_rows="dynamic",
@@ -212,14 +278,21 @@ def show(client, db_name, user_email, real_name):
 
     if st.button("💾 儲存修改 (表格編輯後請按我)", type="secondary", use_container_width=True):
          with st.spinner("儲存變更中..."):
-            # 儲存前先移除「選取」欄位，因為資料庫不需要存這個
+            # 儲存前先移除「選取」欄位
             df_to_save = edited_df.drop(columns=["選取"]) if "選取" in edited_df.columns else edited_df
+            
+            # 【修復】驗證所有輸入
+            for col in ["客戶名稱", "工作內容", "實際行程"]:
+                if col in df_to_save.columns:
+                    df_to_save[col] = df_to_save[col].apply(lambda x: sanitize_input(x))
             
             success, msg = save_to_google_sheet(ws, all_df, df_to_save, start_date, end_date)
             if success:
-                st.success("✅ 修改已儲存！")
+                st.success("✅ 修改已儲存!")
                 time.sleep(1)
                 st.rerun()
+            elif msg == "速率限制":
+                pass
             else:
                 st.error(f"儲存失敗: {msg}")
 
@@ -230,7 +303,7 @@ def show(client, db_name, user_email, real_name):
     # ==========================================
     st.subheader("📤 產生 LINE 日報文字")
 
-    # [關鍵邏輯] 只抓取「被勾選 (True)」的資料
+    # 只抓取「被勾選 (True)」的資料
     if "選取" in edited_df.columns:
         selected_rows = edited_df[edited_df["選取"] == True].copy()
     else:
@@ -239,7 +312,7 @@ def show(client, db_name, user_email, real_name):
     if selected_rows.empty:
         st.info("💡 請在上方表格勾選要傳送的項目 (預設已勾選今天)。")
     else:
-        # 按日期排序，讓報表整齊
+        # 按日期排序
         selected_rows = selected_rows.sort_values(by="日期")
         
         # 產生報表頭
@@ -249,8 +322,7 @@ def show(client, db_name, user_email, real_name):
         unique_dates = selected_rows["日期"].unique()
         
         for d in unique_dates:
-            d_str = str(d) # 轉字串 YYYY-MM-DD
-            # 取得該日期的所有工作
+            d_str = str(d)
             day_rows = selected_rows[selected_rows["日期"] == d]
             
             msg_lines.append(f"\n📅 {d_str}")
@@ -265,12 +337,12 @@ def show(client, db_name, user_email, real_name):
                 if not c_name and not job and not result: continue
 
                 msg_lines.append(f"🏢 {c_name} {cat}")
-                if job: msg_lines.append(f"📝 {job}")
+                if job: msg_lines.append(f"📋 {job}")
                 if result: msg_lines.append(f"✅ {result}")
                 msg_lines.append("---")
             
         final_msg = "\n".join(msg_lines)
         
-        # 使用 st.code 顯示，右上角會有一個「複製」按鈕
+        # 使用 st.code 顯示
         st.code(final_msg, language="text")
-        st.caption("👆 點擊右上角的「複製圖示」，即可貼到 LINE 群組。")
+        st.caption("👆 點擊右上角的「複製圖示」,即可貼到 LINE 群組。")
