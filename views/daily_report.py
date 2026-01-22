@@ -1,13 +1,9 @@
 import streamlit as st
-import streamlit.components.v1 as components
 from datetime import date, datetime, timezone, timedelta
 import pandas as pd
 import gspread 
 import time
 import urllib.parse 
-
-# === 您的 LIFF ID ===
-LIFF_ID = "2008908706-VqUYGFLL" 
 
 def get_tw_time():
     tw_tz = timezone(timedelta(hours=8))
@@ -231,16 +227,19 @@ def show(client, db_name, user_email, real_name):
     st.markdown("---")
     st.subheader("📤 發送日報到 LINE")
     
-    today_data = edited_df[edited_df["日期"] == today]
+    # 確保只抓取日期的比較邏輯正確
+    today_date = date.today()
+    
+    # 注意：這裡使用 edited_df (最新的編輯內容)
+    # 需確保 '日期' 欄位是 date 類型 (st.data_editor 通常會返回 date 物件)
+    today_data = edited_df[edited_df["日期"] == today_date]
     
     valid_rows = []
     for idx, row in today_data.iterrows():
-        # [優化] 改良後的判斷邏輯：只要有填其中一項，就算有效資料
         c_name = str(row.get("客戶名稱", "")).strip()
         job = str(row.get("工作內容", "")).strip()
         result = str(row.get("實際行程", "")).strip()
         
-        # 定義無效字串 (包含預設值)
         invalid_names = ["", "請填入4個字"]
         invalid_jobs = ["", "今日預計行程"]
         invalid_results = ["", "今日實際行程"]
@@ -249,20 +248,18 @@ def show(client, db_name, user_email, real_name):
         has_real_job = job not in invalid_jobs
         has_real_result = result not in invalid_results
         
-        # 只要有一項是真的內容，就加入發送清單
         if has_real_name or has_real_job or has_real_result:
             valid_rows.append(row)
     
     if not valid_rows:
         st.warning("⚠️ 今天還沒有填寫任何有效資料，無法發送日報。")
     else:
-        msg_lines = [f"【{real_name} 日報】📅 {today}"]
+        msg_lines = [f"【{real_name} 日報】📅 {today_date}"]
         msg_lines.append("--------------")
         for row in valid_rows:
-            # 處理客戶名稱顯示
             client_name = str(row.get("客戶名稱", ""))
             if client_name in ["", "請填入4個字"]:
-                client_name = "（內部/其他事項）" # 當沒填客戶時，自動顯示這個
+                client_name = "（內部/其他事項）"
             
             cat = row.get("客戶分類", "")
             if cat == "請選擇客戶ABC": cat = "" 
@@ -281,7 +278,6 @@ def show(client, db_name, user_email, real_name):
         msg_text = "\n".join(msg_lines)
         encoded_text = urllib.parse.quote(msg_text)
         
-        # 分享連結
         share_url = f"https://line.me/R/share?text={encoded_text}"
         
         col_btn, col_copy = st.columns([1, 1])
