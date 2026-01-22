@@ -1,333 +1,424 @@
 import streamlit as st
-from datetime import date, datetime, timezone, timedelta
 import pandas as pd
-import gspread 
+from datetime import date, datetime, timedelta
+import gspread
 import time
-from functools import wraps
+from gspread.exceptions import APIError, SpreadsheetNotFound
 import logging
 
-# ==========================================
-#  安全性設定：速率限制
-# ==========================================
-save_rate_limits = {}
+# === 設定:系統分頁黑名單 ===
+SYSTEM_SHEETS = [
+    "DATA", "經銷價(總)", "整套搭配", "參數設定", "總表", 
+    "溫控器", "雷射", "SENSOR", "減速機", "變頻器", "伺服", 
+    "PLC", "人機", "軟體", "Robot", "配件", "端子臺",
+    "Users", "Logs", "Sessions"
+]
 
-def rate_limit_save(max_calls=5, period=60):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            user_email = st.session_state.get('user_email', 'anonymous')
-            now = time.time()
-            if user_email not in save_rate_limits: save_rate_limits[user_email] = []
-            save_rate_limits[user_email] = [t for t in save_rate_limits[user_email] if now - t < period]
-            if len(save_rate_limits[user_email]) >= max_calls:
-                st.error(f"⚠️ 儲存過於頻繁，請 {period} 秒後再試")
-                logging.warning(f"Rate limit exceeded for {user_email} on {func.__name__}")
-                return False, "速率限制"
-            save_rate_limits[user_email].append(now)
-            return func(*args, **kwargs)
-        return wrapper
-    return decorator
+# === 設定:直賣全員名單 ===
+DIRECT_SALES_NAMES = [
+    "曾仁君", "溫達仁", "楊家豪", "莊富丞", "謝瑞騏", "何宛茹", "張書偉"
+]
 
-# ==========================================
-#  工具函式
-# ==========================================
-def get_tw_time():
-    tw_tz = timezone(timedelta(hours=8))
-    return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
+# === 設定:經銷全員名單 ===
+DISTRIBUTOR_SALES_NAMES = [
+    "張何達", "周柏翰", "葉仁豪"
+]
 
-def get_default_range(today):
-    # 【優化】自動顯示到明天，方便輸入明日計畫
-    weekday_idx = today.weekday()
-    start = today - timedelta(days=weekday_idx)
-    end = today + timedelta(days=1) 
-    return start, end
+# === 設定:特殊群組選項名稱 ===
+OPT_ALL = "(1) 🟢 全員選取"
+OPT_DIRECT = "(2) 🔵 直賣全員"
+OPT_DIST = "(3) 🟠 經銷全員"
+SPECIAL_OPTS = [OPT_ALL, OPT_DIRECT, OPT_DIST]
 
-def get_weekday_str(date_obj):
-    if not isinstance(date_obj, (date, datetime)): return ""
-    weekdays_map = {0:"(一)", 1:"(二)", 2:"(三)", 3:"(四)", 4:"(五)", 5:"(六)", 6:"(日)"}
-    try: return weekdays_map.get(date_obj.weekday(), "")
-    except: return ""
-
-def get_or_create_user_sheet(client, db_name, real_name):
-    try: sh = client.open(db_name)
-    except Exception as e:
-        st.error(f"找不到 Google Sheet:{db_name}")
-        return None
-    HEADERS = ["項次", "日期", "星期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]
-    try: return sh.worksheet(real_name)
-    except gspread.WorksheetNotFound:
+# === 資料庫連線 (移除快取以確保穩定性) ===
+def get_spreadsheet_with_retry(client, db_name, max_retries=3):
+    """
+    使用重試機制開啟 Google Sheets
+    """
+    for attempt in range(max_retries):
         try:
-            ws = sh.add_worksheet(title=real_name, rows=1000, cols=10)
-            ws.append_row(HEADERS)
-            return ws
-        except Exception: return None
+            sh = client.open(db_name)
+            return sh
+        except SpreadsheetNotFound:
+            logging.error(f"Spreadsheet not found: {db_name}")
+            raise
+        except APIError as e:
+            if "429" in str(e) or "Quota exceeded" in str(e):
+                if attempt < max_retries - 1:
+                    wait_time = (attempt + 1) * 2
+                    time.sleep(wait_time)
+                    continue
+                else:
+                    raise
+            else:
+                if attempt < max_retries - 1:
+                    time.sleep(1)
+                    continue
+                else:
+                    raise
+        except Exception as e:
+            if attempt < max_retries - 1:
+                wait_time = (attempt + 1) * 1.5
+                time.sleep(wait_time)
+                continue
+            else:
+                raise
+    return None
 
-# 【修正三】Session State 快取機制
-def load_data_by_range_cached(ws, start_date, end_date):
+# === 取得工作表列表 (移除快取以避免物件序列化錯誤) ===
+def get_worksheets_retry(spreadsheet):
     """
-    快取版讀取函式：
-    如果 Session State 中已有該區間的資料，直接回傳，避免一直讀取 Google Sheets。
+    取得工作表列表
     """
-    cache_key = f"data_{start_date}_{end_date}"
-    
-    if "daily_data_cache" not in st.session_state:
-        st.session_state.daily_data_cache = None
-    if "daily_data_key" not in st.session_state:
-        st.session_state.daily_data_key = ""
-
-    # 使用快取條件
-    if st.session_state.daily_data_cache is not None and st.session_state.daily_data_key == cache_key:
-        return st.session_state.daily_data_cache
-
-    # 執行實際讀取
     try:
-        data = ws.get_all_records()
-        ui_columns = ["日期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]
-        if not data: 
-            result = (pd.DataFrame(columns=ui_columns), pd.DataFrame())
+        worksheets = spreadsheet.worksheets()
+        return {ws.title: ws for ws in worksheets}
+    except Exception as e:
+        logging.error(f"Failed to get worksheets: {e}")
+        return {}
+
+# === CSV Injection 防護 ===
+def sanitize_csv_field(value):
+    """清理 CSV 欄位以防注入攻擊"""
+    if not isinstance(value, str):
+        return value
+    
+    dangerous_chars = ['=', '+', '-', '@', '\t', '\r']
+    if value and value[0] in dangerous_chars:
+        return "'" + value
+    
+    return value
+
+# === 智慧延遲策略 ===
+class APIRateLimiter:
+    """API 速率限制器 (指數退避)"""
+    def __init__(self):
+        self.request_times = []
+        self.base_delay = 0.5
+        self.max_delay = 10
+        self.current_delay = self.base_delay
+        
+    def wait(self):
+        """智慧等待"""
+        now = time.time()
+        self.request_times = [t for t in self.request_times if now - t < 60]
+        
+        if len(self.request_times) > 50:
+            self.current_delay = min(self.current_delay * 1.5, self.max_delay)
         else:
-            df = pd.DataFrame(data)
-            if "項次" in df.columns: df = df.drop(columns=["項次"])
-            df = df.fillna("")
+            self.current_delay = max(self.current_delay * 0.9, self.base_delay)
+        
+        time.sleep(self.current_delay)
+        self.request_times.append(now)
+    
+    def handle_error(self, attempt):
+        """處理 429 錯誤的等待時間"""
+        wait_time = min(2 ** attempt * 2, 30)
+        return wait_time
+
+rate_limiter = APIRateLimiter()
+
+def load_data_from_sheet(ws, start_date, end_date):
+    """讀取資料並清洗 (加入重試機制)"""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            if attempt > 0:
+                wait_time = rate_limiter.handle_error(attempt)
+                time.sleep(wait_time)
             
-            for col in ["客戶名稱", "工作內容", "實際行程", "客戶分類", "最後更新時間"]:
-                if col in df.columns: df[col] = df[col].astype(str)
+            data = ws.get_all_records()
+            ui_columns = ["日期", "星期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]
+            
+            if not data:
+                return pd.DataFrame(columns=ui_columns)
+            
+            df = pd.DataFrame(data)
+
+            if "項次" in df.columns:
+                df = df.drop(columns=["項次"])
+            
+            for col in ui_columns:
+                if col not in df.columns:
+                    df[col] = ""
 
             df["日期"] = pd.to_datetime(df["日期"], errors='coerce').dt.date
+            df = df.dropna(subset=["日期"]) 
+
             mask = (df["日期"] >= start_date) & (df["日期"] <= end_date)
-            filtered_df = df.loc[mask].copy().sort_values(by=["日期"], ascending=True).reset_index(drop=True)
+            filtered_df = df.loc[mask].copy()
             
-            display_df = filtered_df[ui_columns].copy() if not filtered_df.empty else pd.DataFrame(columns=ui_columns)
-            result = (display_df, df)
-
-        # 寫入快取
-        st.session_state.daily_data_cache = result
-        st.session_state.daily_data_key = cache_key
-        return result
-    except Exception as e:
-        logging.error(f"Failed to load data: {e}")
-        return pd.DataFrame(columns=["日期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]), pd.DataFrame()
-
-@rate_limit_save(max_calls=5, period=60)
-def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
-    """將目前的 DataFrame 完整存回 Google Sheet，並清除快取"""
-    try:
-        current_df["日期"] = pd.to_datetime(current_df["日期"], errors='coerce').dt.date
-        current_df = current_df.dropna(subset=["日期"])
-        current_df["星期"] = current_df["日期"].apply(lambda x: get_weekday_str(x))
-        current_df["最後更新時間"] = get_tw_time()
+            filtered_df = filtered_df.sort_values(by=["日期"], ascending=False)
+            return filtered_df[ui_columns]
         
-        if not all_df.empty and "日期" in all_df.columns:
-            all_df["日期"] = pd.to_datetime(all_df["日期"], errors='coerce').dt.date
-            mask_keep = (all_df["日期"] < start_date) | (all_df["日期"] > end_date)
-            remaining_df = all_df.loc[mask_keep].copy()
-        else:
-            remaining_df = pd.DataFrame()
-
-        final_df = pd.concat([remaining_df, current_df], ignore_index=True)
-        final_df = final_df.sort_values(by=["日期"], ascending=True)
-
-        if "項次" in final_df.columns: final_df = final_df.drop(columns=["項次"])
-        final_df.insert(0, "項次", range(1, len(final_df) + 1))
-
-        cols_order = ["項次", "日期", "星期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]
-        for c in cols_order:
-            if c not in final_df.columns: final_df[c] = ""
-        final_df = final_df[cols_order]
-        final_df = final_df.fillna("")
-        final_df["日期"] = final_df["日期"].astype(str)
-
-        val_list = [final_df.columns.values.tolist()] + final_df.values.tolist()
-        ws.clear()
-        ws.update(values=val_list, range_name='A1')
-        
-        # 儲存後清除快取
-        if "daily_data_cache" in st.session_state:
-            del st.session_state.daily_data_cache
-        
-        return True, "儲存成功"
-    except Exception as e:
-        return False, str(e)
-
-# ==========================================
-#  輸入驗證與清理
-# ==========================================
-MAX_FIELD_LENGTH = 5000 
-def sanitize_input(text, max_length=MAX_FIELD_LENGTH):
-    if not text: return ""
-    text = str(text).strip()
-    return text[:max_length] if len(text) > max_length else text
-
-# ==========================================
-#  主顯示函式
-# ==========================================
-def show(client, db_name, user_email, real_name):
-    st.title(f"📝 {real_name} 的業務日報")
-    ws = get_or_create_user_sheet(client, db_name, real_name)
-    if not ws: return
-
-    today = date.today()
-    def_start, def_end = get_default_range(today)
-    
-    with st.expander("📅 切換資料日期區間", expanded=False):
-        date_range = st.date_input("選擇區間", (def_start, def_end))
-    
-    if isinstance(date_range, tuple) and len(date_range) == 2: start_date, end_date = date_range
-    elif isinstance(date_range, tuple) and len(date_range) == 1: start_date = end_date = date_range[0]
-    else: start_date = end_date = today
-
-    # 【修正三】使用快取讀取
-    current_df, all_df = load_data_by_range_cached(ws, start_date, end_date)
-
-    if not current_df.empty:
-        current_df.insert(0, "選取", False)
-        # 【討論實作】自動勾選今天(實績)與明天(計畫)
-        try:
-            date_col = pd.to_datetime(current_df["日期"]).dt.date
-            tomorrow = today + timedelta(days=1)
-            mask_auto_select = (date_col == today) | (date_col == tomorrow)
-            current_df.loc[mask_auto_select, "選取"] = True
-        except: pass
-
-    # ==========================================
-    #  Part 1: 新增工作
-    # ==========================================
-    st.markdown("### ➕ 新增工作")
-    
-    with st.container(border=True):
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            inp_date = st.date_input("日期", today)
-        with c2:
-            inp_type = st.selectbox("客戶分類", 
-                ["請選擇", "(A) 直賣A級", "(B) 直賣B級", "(C) 直賣C級", "(D-A) 經銷A級", "(D-B) 經銷B級", "(D-C) 經銷C級", "(O) 其它"],
-                index=0
-            )
-        
-        # 【修正二】 Placeholder 文字更新
-        inp_client = st.text_input("客戶名稱", placeholder="客戶名稱", max_chars=MAX_FIELD_LENGTH)
-        inp_content = st.text_area("工作內容", placeholder="輸入預計行程", height=100, max_chars=MAX_FIELD_LENGTH)
-        inp_result = st.text_area("實際行程", placeholder="輸入當日實際行程", height=100, max_chars=MAX_FIELD_LENGTH)
-
-        if st.button("➕ 加入清單", type="primary", use_container_width=True):
-            inp_client = sanitize_input(inp_client)
-            inp_content = sanitize_input(inp_content)
-            inp_result = sanitize_input(inp_result)
-            
-            if not inp_client:
-                st.warning("⚠️ 請輸入客戶名稱")
-            else:
-                new_row = pd.DataFrame([{
-                    "日期": inp_date,
-                    "客戶名稱": inp_client,
-                    "客戶分類": inp_type if inp_type != "請選擇" else "",
-                    "工作內容": inp_content,
-                    "實際行程": inp_result,
-                    "最後更新時間": get_tw_time()
-                }])
-                
-                if "選取" in current_df.columns:
-                    df_to_save = current_df.drop(columns=["選取"])
+        except APIError as e:
+            if "429" in str(e) or "Quota exceeded" in str(e):
+                if attempt < max_retries - 1:
+                    wait_time = rate_limiter.handle_error(attempt + 1)
+                    continue
                 else:
-                    df_to_save = current_df
-
-                df_to_save = pd.concat([df_to_save, new_row], ignore_index=True)
-                
-                with st.spinner("正在儲存..."):
-                    success, msg = save_to_google_sheet(ws, all_df, df_to_save, start_date, end_date)
-                    if success:
-                        st.success("✅ 已新增並儲存!")
-                        time.sleep(1)
-                        st.rerun()
-                    else:
-                        st.error(f"儲存失敗: {msg}")
-
-    # ==========================================
-    #  Part 2: 檢視與編輯清單
-    # ==========================================
-    st.write("")
-    st.subheader(f"📋 工作清單 ({start_date} ~ {end_date})")
-    
-    # 【修正二】欄位標題更新
-    edited_df = st.data_editor(
-        current_df,
-        num_rows="dynamic",
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "選取": st.column_config.CheckboxColumn("LINE日報", width="small", help="勾選以產生 LINE 報表"),
-            "日期": st.column_config.DateColumn("日期", format="YYYY-MM-DD", width="small"),
-            "客戶名稱": st.column_config.TextColumn("客戶名稱", width="medium"),
-            "客戶分類": st.column_config.SelectboxColumn("客戶分類", width="small", 
-                options=["(A) 直賣A級", "(B) 直賣B級", "(C) 直賣C級", "(D-A) 經銷A級", "(D-B) 經銷B級", "(D-C) 經銷C級", "(O) 其它"]),
-            "工作內容": st.column_config.TextColumn("工作內容", width="large"),
-            "實際行程": st.column_config.TextColumn("實際行程", width="large"),
-            "最後更新時間": st.column_config.TextColumn("更新時間", disabled=True, width="small")
-        },
-        key="data_editor_grid"
-    )
-
-    if st.button("💾 儲存修改 (表格編輯後請按我)", type="secondary", use_container_width=True):
-         with st.spinner("儲存變更中..."):
-            df_to_save = edited_df.drop(columns=["選取"]) if "選取" in edited_df.columns else edited_df
-            
-            for col in ["客戶名稱", "工作內容", "實際行程"]:
-                if col in df_to_save.columns:
-                    df_to_save[col] = df_to_save[col].apply(lambda x: sanitize_input(x))
-            
-            success, msg = save_to_google_sheet(ws, all_df, df_to_save, start_date, end_date)
-            if success:
-                st.success("✅ 修改已儲存!")
-                time.sleep(1)
-                st.rerun()
+                    logging.error(f"API quota exceeded after {max_retries} retries")
+                    raise
             else:
-                st.error(f"儲存失敗: {msg}")
+                logging.error(f"API error: {e}")
+                raise
+        except Exception as e:
+            logging.error(f"Failed to load data from sheet: {e}")
+            return pd.DataFrame()
+    
+    return pd.DataFrame()
+
+def get_all_sales_names(ws_map):
+    """從工作表字典中篩選業務員名稱"""
+    sales_names = []
+    for title in ws_map.keys():
+        if title not in SYSTEM_SHEETS and not title.startswith("整套_") and "經銷" not in title:
+            sales_names.append(title)
+    return sales_names
+
+def show(client, db_name, user_email, real_name, is_manager):
+    st.title("📊 日報總覽與匯出")
+
+    # === 連線資料庫 ===
+    try:
+        with st.spinner("正在連線資料庫..."):
+            sh = get_spreadsheet_with_retry(client, db_name)
+            if not sh:
+                st.error(f"❌ 無法開啟資料庫: {db_name}")
+                return
+    except SpreadsheetNotFound:
+        st.error(f"❌ 找不到資料庫: {db_name}")
+        st.info("💡 請確認 Google Sheet 名稱是否正確，並已共用給 Service Account")
+        return
+    except Exception as e:
+        # 【修正】顯示詳細錯誤訊息以便除錯
+        st.error(f"❌ 資料庫連線失敗: {e}")
+        st.info("💡 如果是 API Error 403，代表沒有權限。")
+        return
+
+    # === 1. 日期選擇器 ===
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        today = date.today()
+        start_default = today - timedelta(days=today.weekday())
+        end_default = today
+        
+        date_range = st.date_input(
+            "📅 選擇查詢區間", 
+            (start_default, end_default),
+            key="overview_range_picker"
+        )
+
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start_date, end_date = date_range
+    else:
+        st.warning("請選擇完整的起始與結束日期")
+        return
+
+    # === 2. 人員選擇 ===
+    user_role = "manager" if is_manager else "sales"
+    current_user_name = real_name
+    target_users = []
+
+    # === 讀取工作表列表 ===
+    try:
+        with st.spinner("正在讀取工作表列表..."):
+            ws_map = get_worksheets_retry(sh)
+            if not ws_map:
+                st.error("❌ 無法讀取工作表列表 (可能是空的或權限不足)")
+                return
+    except Exception as e:
+        st.error(f"❌ 讀取資料庫結構失敗: {e}")
+        return
+
+    if user_role == "manager":
+        if "overview_sales_select" not in st.session_state:
+            st.session_state.overview_sales_select = []
+        if "overview_sales_prev" not in st.session_state:
+            st.session_state.overview_sales_prev = st.session_state.overview_sales_select
+
+        all_sales = get_all_sales_names(ws_map)
+        
+        valid_direct_names = [name for name in DIRECT_SALES_NAMES if name in all_sales]
+        valid_dist_names = [name for name in DISTRIBUTOR_SALES_NAMES if name in all_sales]
+        
+        menu_options = SPECIAL_OPTS + sorted(all_sales)
+
+        def on_selection_change():
+            current = st.session_state.overview_sales_select
+            previous = st.session_state.overview_sales_prev
+            
+            added = [item for item in current if item not in previous]
+            new_selection = current
+            
+            if added:
+                new_item = added[-1]
+                if new_item in SPECIAL_OPTS:
+                    new_selection = [new_item]
+                else:
+                    new_selection = [item for item in current if item not in SPECIAL_OPTS]
+            
+            st.session_state.overview_sales_select = new_selection
+            st.session_state.overview_sales_prev = new_selection
+
+        with col2:
+            st.multiselect(
+                "👥 選擇查看對象",
+                options=menu_options,
+                key="overview_sales_select", 
+                on_change=on_selection_change 
+            )
+
+        selected_options = st.session_state.overview_sales_select
+        
+        final_target_set = set()
+        if OPT_ALL in selected_options:
+            final_target_set.update(all_sales)
+        else:
+            if OPT_DIRECT in selected_options:
+                final_target_set.update(valid_direct_names)
+            if OPT_DIST in selected_options:
+                final_target_set.update(valid_dist_names)
+            
+            for opt in selected_options:
+                if opt not in SPECIAL_OPTS:
+                    final_target_set.add(opt)
+        
+        target_users = sorted(list(final_target_set))
+            
+    else:
+        with col2:
+            st.text_input("👤 查看對象", value=current_user_name, disabled=True)
+        target_users = [current_user_name]
+
+    if not target_users:
+        if user_role == "manager":
+            st.info("請選擇人員或群組 (預設不顯示，請手動選擇)。")
+        else:
+            st.error("找不到您的資料表，請聯繫管理員。")
+        return
 
     st.markdown("---")
     
-    # ==========================================
-    #  Part 3: 產生 LINE 文字
-    # ==========================================
-    st.subheader("📤 產生 LINE 日報文字")
-
-    if "選取" in edited_df.columns:
-        selected_rows = edited_df[edited_df["選取"] == True].copy()
-    else:
-        selected_rows = pd.DataFrame()
+    # === 3. 讀取與顯示 (智慧速率限制版) ===
+    all_data = []
     
-    if selected_rows.empty:
-        st.info("💡 請在上方表格勾選要傳送的項目。")
+    MAX_USERS = 30
+    if len(target_users) > MAX_USERS:
+        st.error(f"⚠️ 一次最多查詢 {MAX_USERS} 位業務員，請縮小範圍")
+        return
+    
+    estimated_time = len(target_users) * rate_limiter.current_delay
+    st.info(f"⏱️ 正在讀取 {len(target_users)} 位業務員資料 (預計需時 {estimated_time:.1f} 秒)")
+    
+    # 防止重複查詢的機制
+    query_key = f"{start_date}_{end_date}_{'_'.join(sorted(target_users))}"
+    
+    if "last_query_key" not in st.session_state:
+        st.session_state.last_query_key = ""
+    if "last_query_data" not in st.session_state:
+        st.session_state.last_query_data = None
+    
+    # 如果查詢條件相同，直接使用快取結果
+    if st.session_state.last_query_key == query_key and st.session_state.last_query_data is not None:
+        st.success("✅ 使用快取資料 (無需重新查詢)")
+        final_df = st.session_state.last_query_data
     else:
-        selected_rows = selected_rows.sort_values(by="日期")
-        msg_lines = [f"【{real_name} 業務匯報】"]
-        unique_dates = selected_rows["日期"].unique()
-        
-        for d in unique_dates:
-            d_str = str(d)
-            day_rows = selected_rows[selected_rows["日期"] == d]
+        # 執行新查詢
+        with st.spinner(f"彙整中..."):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
             
-            header_suffix = ""
-            try:
-                if d == today + timedelta(days=1): header_suffix = " (明日計畫)"
-                elif d == today: header_suffix = " (今日實績)"
-            except: pass
-
-            msg_lines.append(f"\n📅 {d_str}{header_suffix}")
-            msg_lines.append("--------------")
+            failed_users = []
             
-            for idx, row in day_rows.iterrows():
-                c_name = str(row.get("客戶名稱", "")).strip()
-                job = str(row.get("工作內容", "")).strip()
-                result = str(row.get("實際行程", "")).strip()
-                cat = str(row.get("客戶分類", "")).strip()
+            for idx, user_name in enumerate(target_users):
+                status_text.text(f"正在讀取: {user_name} ({idx+1}/{len(target_users)})")
+                ws = ws_map.get(user_name)
                 
-                if not c_name and not job and not result: continue
-
-                msg_lines.append(f"🏢 {c_name} {cat}")
-                if job: msg_lines.append(f"📋 計畫：{job}")
-                if result: msg_lines.append(f"✅ 實績：{result}")
-                msg_lines.append("---")
+                if ws:
+                    try:
+                        rate_limiter.wait()
+                        
+                        df = load_data_from_sheet(ws, start_date, end_date)
+                        if not df.empty:
+                            df.insert(0, "業務員", user_name)
+                            all_data.append(df)
+                    
+                    except APIError as e:
+                        if "429" in str(e):
+                            failed_users.append(user_name)
+                            st.warning(f"⚠️ {user_name} 讀取失敗 (API 超載)，請稍後重試")
+                        else:
+                            failed_users.append(user_name)
+                    except Exception as e:
+                        failed_users.append(user_name)
+                
+                progress_bar.progress((idx + 1) / len(target_users))
             
-        final_msg = "\n".join(msg_lines)
-        st.code(final_msg, language="text")
-        st.caption("👆 點擊右上角的「複製圖示」,即可貼到 LINE 群組。")
+            status_text.empty()
+            progress_bar.empty()
+            
+            if failed_users:
+                st.error(f"❌ 以下 {len(failed_users)} 位業務員資料讀取失敗: {', '.join(failed_users)}")
+
+        if not all_data:
+            st.info("🔍 所選區間內無資料。")
+            return
+
+        final_df = pd.concat(all_data, ignore_index=True)
+        
+        # 儲存到快取
+        st.session_state.last_query_key = query_key
+        st.session_state.last_query_data = final_df
+    
+    # 統計摘要
+    st.subheader(f"📈 統計摘要 ({start_date} ~ {end_date})")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("總填寫筆數", len(final_df))
+    m2.metric("參與業務人數", len(final_df["業務員"].unique()))
+    m3.metric("拜訪客戶數", len(final_df["客戶名稱"].unique()))
+
+    # 詳細表格
+    st.subheader("📝 詳細列表")
+    
+    MAX_DISPLAY_ROWS = 1000
+    if len(final_df) > MAX_DISPLAY_ROWS:
+        st.warning(f"⚠️ 資料過多，僅顯示前 {MAX_DISPLAY_ROWS} 筆 (下載 CSV 可取得完整資料)")
+        display_df = final_df.head(MAX_DISPLAY_ROWS)
+    else:
+        display_df = final_df
+    
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "日期": st.column_config.DateColumn("日期", format="YYYY-MM-DD"),
+            "最後更新時間": st.column_config.TextColumn("更新時間", width="small")
+        }
+    )
+
+    # 匯出 CSV
+    fname = f"業務日報彙整_{start_date}_{end_date}.csv"
+    
+    export_df = final_df.copy()
+    export_df = export_df.applymap(sanitize_csv_field)
+    
+    csv = export_df.to_csv(index=False).encode('utf-8-sig')
+    
+    st.download_button(
+        label="📥 下載 CSV 報表",
+        data=csv,
+        file_name=fname,
+        mime="text/csv",
+        type="primary"
+    )
+    
+    # 手動清除快取按鈕
+    st.markdown("---")
+    if st.button("🔄 強制重新查詢 (清除快取)"):
+        st.session_state.last_query_key = ""
+        st.session_state.last_query_data = None
+        st.success("✅ 快取已清除，正在重新載入...")
+        time.sleep(1)
+        st.rerun()
