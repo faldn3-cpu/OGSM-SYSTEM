@@ -1,9 +1,14 @@
 import streamlit as st
+import streamlit.components.v1 as components
 from datetime import date, datetime, timezone, timedelta
 import pandas as pd
 import gspread 
 import time
-import urllib.parse 
+import json
+
+# === 設定 LIFF ID ===
+# 請確保此 ID 在 LINE Developers Console 已開啟 "Share Target Picker" 權限
+LIFF_ID = "2008908706-VqUYGFLL"
 
 def get_tw_time():
     tw_tz = timezone(timedelta(hours=8))
@@ -225,7 +230,7 @@ def show(client, db_name, user_email, real_name):
                         st.error(f"上傳失敗：{msg}")
 
     st.markdown("---")
-    st.subheader("📤 發送日報到 LINE")
+    st.subheader("📤 發送日報到 LINE (LIFF 增強版)")
     
     today_date = date.today()
     today_data = edited_df[edited_df["日期"] == today_date]
@@ -250,12 +255,12 @@ def show(client, db_name, user_email, real_name):
     if not valid_rows:
         st.warning("⚠️ 今天還沒有填寫任何有效資料，無法發送日報。")
     else:
+        # === 準備訊息內容 ===
         msg_lines = [f"【{real_name} 日報】📅 {today_date}"]
         msg_lines.append("--------------")
         for row in valid_rows:
             client_name = str(row.get("客戶名稱", ""))
-            if client_name in ["", "請填入4個字"]:
-                client_name = "（內部/其他事項）"
+            if client_name in ["", "請填入4個字"]: client_name = "（內部/其他事項）"
             
             cat = row.get("客戶分類", "")
             if cat == "請選擇客戶ABC": cat = "" 
@@ -272,17 +277,109 @@ def show(client, db_name, user_email, real_name):
             msg_lines.append("---")
         
         msg_text = "\n".join(msg_lines)
-        encoded_text = urllib.parse.quote(msg_text)
         
-        # [修正處] 改用 msg/text 格式，以確保在電腦版也能正確開啟傳送視窗
-        share_url = f"https://line.me/R/msg/text/?{encoded_text}"
+        # === JS Escaping (防止文字中斷 JS 程式碼) ===
+        # 將 Python 字串轉換為 JSON 格式字串，這樣在 JS 中就是安全的
+        safe_msg_json = json.dumps(msg_text) 
+
+        # === 嵌入 LIFF JavaScript ===
+        # 使用 Streamlit Component 嵌入 HTML/JS
+        # 這會產生一個使用 LIFF SDK 的按鈕
+        
+        liff_script = f"""
+        <html>
+        <head>
+            <script charset="utf-8" src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
+            <style>
+                .liff-btn {{
+                    background-color: #06c755;
+                    color: white;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 12px 24px;
+                    font-size: 16px;
+                    font-weight: bold;
+                    width: 100%;
+                    cursor: pointer;
+                    transition: background-color 0.3s;
+                    font-family: "Helvetica Neue", Arial, sans-serif;
+                }}
+                .liff-btn:hover {{
+                    background-color: #05b34c;
+                }}
+                .status {{
+                    margin-top: 8px;
+                    font-size: 12px;
+                    color: #666;
+                    text-align: center;
+                }}
+            </style>
+        </head>
+        <body>
+            <button id="sendBtn" class="liff-btn" onclick="sendLiffMessage()">🚀 開啟 LINE 選擇好友傳送</button>
+            <div id="status" class="status">準備就緒</div>
+
+            <script>
+                // 1. 初始化 LIFF
+                async function initializeLiff() {{
+                    try {{
+                        await liff.init({{ liffId: "{LIFF_ID}" }});
+                        if (!liff.isLoggedIn()) {{
+                            // 如果沒登入，按鈕點擊會先觸發登入
+                            document.getElementById("status").innerText = "請點擊按鈕登入 LINE";
+                        }} else {{
+                            document.getElementById("status").innerText = "已登入 LINE，可發送";
+                        }}
+                    }} catch (err) {{
+                        document.getElementById("status").innerText = "LIFF 初始化失敗: " + err;
+                    }}
+                }}
+
+                // 2. 發送訊息邏輯
+                async function sendLiffMessage() {{
+                    if (!liff.isInClient() && !liff.isLoggedIn()) {{
+                        liff.login();
+                        return;
+                    }}
+
+                    const message = {safe_msg_json}; // 從 Python 注入的訊息
+
+                    // 檢查是否支援 shareTargetPicker
+                    if (liff.isApiAvailable('shareTargetPicker')) {{
+                        try {{
+                            const res = await liff.shareTargetPicker([
+                                {{
+                                    type: "text",
+                                    text: message
+                                }}
+                            ]);
+                            if (res) {{
+                                document.getElementById("status").innerText = "✅ 發送成功！";
+                            }} else {{
+                                document.getElementById("status").innerText = "❌ 發送取消";
+                            }}
+                        }} catch (error) {{
+                            document.getElementById("status").innerText = "❌ 發送失敗 (請檢查 LIFF 權限): " + error;
+                        }}
+                    }} else {{
+                        document.getElementById("status").innerText = "❌ 您的環境不支援選擇好友功能";
+                    }}
+                }}
+
+                // 啟動
+                initializeLiff();
+            </script>
+        </body>
+        </html>
+        """
         
         col_btn, col_copy = st.columns([1, 1])
         
         with col_btn:
-            st.info("👇 點擊按鈕，自動開啟 LINE 分享視窗")
-            st.link_button("🚀 開啟 LINE (傳送給主管)", share_url, type="primary", use_container_width=True)
+            st.info("👇 使用 LIFF 強力傳送 (支援電腦/手機)")
+            # 設定高度為 100px 以容納按鈕和狀態文字
+            components.html(liff_script, height=120)
             
         with col_copy:
-            st.warning("👇 若按鈕沒反應，請複製下方文字手動貼上")
+            st.warning("👇 備用：若 LIFF 無法開啟，請手動複製")
             st.code(msg_text, language="text")
