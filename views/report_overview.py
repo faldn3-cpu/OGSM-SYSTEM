@@ -30,59 +30,48 @@ OPT_DIRECT = "(2) 🔵 直賣全員"
 OPT_DIST = "(3) 🟠 經銷全員"
 SPECIAL_OPTS = [OPT_ALL, OPT_DIRECT, OPT_DIST]
 
-# === 【新增】資料庫連線快取 ===
-@st.cache_resource(ttl=600)  # 快取 10 分鐘
+# === 資料庫連線 (移除快取以確保穩定性) ===
 def get_spreadsheet_with_retry(client, db_name, max_retries=3):
     """
-    使用重試機制開啟 Google Sheets (解決快速切換時的連線問題)
+    使用重試機制開啟 Google Sheets
     """
     for attempt in range(max_retries):
         try:
             sh = client.open(db_name)
-            logging.info(f"Successfully opened spreadsheet: {db_name}")
             return sh
         except SpreadsheetNotFound:
-            # 如果真的找不到資料庫，直接報錯
             logging.error(f"Spreadsheet not found: {db_name}")
             raise
         except APIError as e:
             if "429" in str(e) or "Quota exceeded" in str(e):
                 if attempt < max_retries - 1:
                     wait_time = (attempt + 1) * 2
-                    logging.warning(f"API 429 when opening spreadsheet, retry in {wait_time}s")
                     time.sleep(wait_time)
                     continue
                 else:
-                    logging.error(f"Failed to open spreadsheet after {max_retries} retries")
                     raise
             else:
-                # 其他 API 錯誤
                 if attempt < max_retries - 1:
                     time.sleep(1)
                     continue
                 else:
                     raise
         except Exception as e:
-            # 網路暫時性錯誤
             if attempt < max_retries - 1:
                 wait_time = (attempt + 1) * 1.5
-                logging.warning(f"Temporary error opening spreadsheet: {e}, retry in {wait_time}s")
                 time.sleep(wait_time)
                 continue
             else:
-                logging.error(f"Failed to open spreadsheet: {e}")
                 raise
-    
     return None
 
-# === 【新增】工作表列表快取 ===
-@st.cache_data(ttl=300)  # 快取 5 分鐘
-def get_worksheets_cached(_spreadsheet):
+# === 取得工作表列表 (移除快取以避免物件序列化錯誤) ===
+def get_worksheets_retry(spreadsheet):
     """
-    快取工作表列表 (減少 API 呼叫)
+    取得工作表列表
     """
     try:
-        worksheets = _spreadsheet.worksheets()
+        worksheets = spreadsheet.worksheets()
         return {ws.title: ws for ws in worksheets}
     except Exception as e:
         logging.error(f"Failed to get worksheets: {e}")
@@ -166,7 +155,6 @@ def load_data_from_sheet(ws, start_date, end_date):
             if "429" in str(e) or "Quota exceeded" in str(e):
                 if attempt < max_retries - 1:
                     wait_time = rate_limiter.handle_error(attempt + 1)
-                    logging.warning(f"API 429 error, waiting {wait_time}s before retry")
                     continue
                 else:
                     logging.error(f"API quota exceeded after {max_retries} retries")
@@ -191,23 +179,21 @@ def get_all_sales_names(ws_map):
 def show(client, db_name, user_email, real_name, is_manager):
     st.title("📊 日報總覽與匯出")
 
-    # === 【修復】使用重試機制開啟資料庫 ===
+    # === 連線資料庫 ===
     try:
         with st.spinner("正在連線資料庫..."):
             sh = get_spreadsheet_with_retry(client, db_name)
             if not sh:
                 st.error(f"❌ 無法開啟資料庫: {db_name}")
-                st.info("💡 請稍後再試，或聯繫系統管理員")
                 return
     except SpreadsheetNotFound:
         st.error(f"❌ 找不到資料庫: {db_name}")
-        st.info("💡 請確認資料庫名稱是否正確，或聯繫系統管理員")
-        logging.error(f"Spreadsheet not found: {db_name}")
+        st.info("💡 請確認 Google Sheet 名稱是否正確，並已共用給 Service Account")
         return
     except Exception as e:
-        st.error(f"❌ 資料庫連線失敗")
-        st.info("💡 可能原因：\n1. 網路不穩定\n2. Google API 暫時性錯誤\n3. 請重新整理頁面")
-        logging.error(f"Failed to open database: {e}")
+        # 【修正】顯示詳細錯誤訊息以便除錯
+        st.error(f"❌ 資料庫連線失敗: {e}")
+        st.info("💡 如果是 API Error 403，代表沒有權限。")
         return
 
     # === 1. 日期選擇器 ===
@@ -234,17 +220,15 @@ def show(client, db_name, user_email, real_name, is_manager):
     current_user_name = real_name
     target_users = []
 
-    # === 【修復】使用快取的工作表列表 ===
+    # === 讀取工作表列表 ===
     try:
         with st.spinner("正在讀取工作表列表..."):
-            ws_map = get_worksheets_cached(sh)
+            ws_map = get_worksheets_retry(sh)
             if not ws_map:
-                st.error("❌ 無法讀取工作表列表")
+                st.error("❌ 無法讀取工作表列表 (可能是空的或權限不足)")
                 return
     except Exception as e:
-        st.error(f"❌ 讀取資料庫結構失敗")
-        st.info("💡 請重新整理頁面後再試")
-        logging.error(f"Failed to load worksheets: {e}")
+        st.error(f"❌ 讀取資料庫結構失敗: {e}")
         return
 
     if user_role == "manager":
@@ -322,13 +306,12 @@ def show(client, db_name, user_email, real_name, is_manager):
     MAX_USERS = 30
     if len(target_users) > MAX_USERS:
         st.error(f"⚠️ 一次最多查詢 {MAX_USERS} 位業務員，請縮小範圍")
-        st.info("💡 建議使用「直賣全員」或「經銷全員」群組，或手動選擇少數人員")
         return
     
     estimated_time = len(target_users) * rate_limiter.current_delay
     st.info(f"⏱️ 正在讀取 {len(target_users)} 位業務員資料 (預計需時 {estimated_time:.1f} 秒)")
     
-    # === 【新增】防止重複查詢的機制 ===
+    # 防止重複查詢的機制
     query_key = f"{start_date}_{end_date}_{'_'.join(sorted(target_users))}"
     
     if "last_query_key" not in st.session_state:
@@ -342,7 +325,7 @@ def show(client, db_name, user_email, real_name, is_manager):
         final_df = st.session_state.last_query_data
     else:
         # 執行新查詢
-        with st.spinner(f"彙整中... (使用智慧速率限制以避免超載)"):
+        with st.spinner(f"彙整中..."):
             progress_bar = st.progress(0)
             status_text = st.empty()
             
@@ -365,14 +348,10 @@ def show(client, db_name, user_email, real_name, is_manager):
                         if "429" in str(e):
                             failed_users.append(user_name)
                             st.warning(f"⚠️ {user_name} 讀取失敗 (API 超載)，請稍後重試")
-                            logging.error(f"API 429 for {user_name}")
                         else:
                             failed_users.append(user_name)
-                            logging.error(f"API error for {user_name}: {e}")
-                    
                     except Exception as e:
                         failed_users.append(user_name)
-                        logging.error(f"Unexpected error loading {user_name}: {e}")
                 
                 progress_bar.progress((idx + 1) / len(target_users))
             
@@ -381,7 +360,6 @@ def show(client, db_name, user_email, real_name, is_manager):
             
             if failed_users:
                 st.error(f"❌ 以下 {len(failed_users)} 位業務員資料讀取失敗: {', '.join(failed_users)}")
-                st.info("💡 建議: 等待 1 分鐘後重新查詢，或減少一次查詢的人數")
 
         if not all_data:
             st.info("🔍 所選區間內無資料。")
@@ -435,16 +413,12 @@ def show(client, db_name, user_email, real_name, is_manager):
         mime="text/csv",
         type="primary"
     )
-    st.caption("⚠️ 下載後請在受信任的環境中開啟檔案")
     
-    # === 【新增】手動清除快取按鈕 ===
+    # 手動清除快取按鈕
     st.markdown("---")
-    if st.button("🔄 強制重新查詢 (清除快取)", help="如果資料有更新但未顯示，請點此按鈕"):
+    if st.button("🔄 強制重新查詢 (清除快取)"):
         st.session_state.last_query_key = ""
         st.session_state.last_query_data = None
-        # 同時清除 Streamlit 的 cache
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        st.success("✅ 快取已清除，重新整理頁面以載入最新資料")
+        st.success("✅ 快取已清除，正在重新載入...")
         time.sleep(1)
         st.rerun()
