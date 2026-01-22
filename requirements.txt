@@ -4,3 +4,4 @@ oauth2client
 pandas
 bcrypt
 secure-smtplib
+extra-streamlit-components
