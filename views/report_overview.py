@@ -11,25 +11,17 @@ SYSTEM_SHEETS = [
     "DATA", "經銷價(總)", "整套搭配", "參數設定", "總表", 
     "溫控器", "雷射", "SENSOR", "減速機", "變頻器", "伺服", 
     "PLC", "人機", "軟體", "Robot", "配件", "端子臺",
-    "Users", "Logs", "Sessions"  # 【修復】加入 Sessions
+    "Users", "Logs", "Sessions"
 ]
 
 # === 設定:直賣全員名單 ===
 DIRECT_SALES_NAMES = [
-    "曾仁君",
-    "溫達仁",
-    "楊家豪",
-    "莊富丞",
-    "謝瑞騏",
-    "何宛茹",
-    "張書偉"
+    "曾仁君", "溫達仁", "楊家豪", "莊富丞", "謝瑞騏", "何宛茹", "張書偉"
 ]
 
 # === 設定:經銷全員名單 ===
 DISTRIBUTOR_SALES_NAMES = [
-    "張何達",
-    "周柏翰",
-    "葉仁豪"
+    "張何達", "周柏翰", "葉仁豪"
 ]
 
 # === 設定:特殊群組選項名稱 ===
@@ -44,49 +36,101 @@ def sanitize_csv_field(value):
     if not isinstance(value, str):
         return value
     
-    # 如果開頭是危險字元，加上單引號前綴
     dangerous_chars = ['=', '+', '-', '@', '\t', '\r']
     if value and value[0] in dangerous_chars:
-        return "'" + value  # Excel 會將其視為純文字
+        return "'" + value
     
     return value
 
+# === 【修復】加入智慧延遲策略 ===
+class APIRateLimiter:
+    """API 速率限制器 (指數退避)"""
+    def __init__(self):
+        self.request_times = []
+        self.base_delay = 0.5  # 基礎延遲 0.5 秒
+        self.max_delay = 10    # 最大延遲 10 秒
+        self.current_delay = self.base_delay
+        
+    def wait(self):
+        """智慧等待 (根據近期 API 呼叫頻率動態調整)"""
+        now = time.time()
+        # 清除 60 秒前的記錄
+        self.request_times = [t for t in self.request_times if now - t < 60]
+        
+        # 如果最近 1 分鐘內呼叫超過 50 次，增加延遲
+        if len(self.request_times) > 50:
+            self.current_delay = min(self.current_delay * 1.5, self.max_delay)
+        else:
+            # 逐漸降低延遲
+            self.current_delay = max(self.current_delay * 0.9, self.base_delay)
+        
+        time.sleep(self.current_delay)
+        self.request_times.append(now)
+    
+    def handle_error(self, attempt):
+        """處理 429 錯誤的等待時間 (指數退避)"""
+        wait_time = min(2 ** attempt * 2, 30)  # 2秒, 4秒, 8秒...最多30秒
+        return wait_time
+
+rate_limiter = APIRateLimiter()
+
 def load_data_from_sheet(ws, start_date, end_date):
-    """讀取資料並清洗"""
-    try:
-        data = ws.get_all_records()
-        ui_columns = ["日期", "星期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]
-        
-        if not data:
-            return pd.DataFrame(columns=ui_columns)
-        
-        df = pd.DataFrame(data)
+    """讀取資料並清洗 (加入重試機制)"""
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            # 【修復】使用智慧延遲
+            if attempt > 0:
+                wait_time = rate_limiter.handle_error(attempt)
+                time.sleep(wait_time)
+            
+            data = ws.get_all_records()
+            ui_columns = ["日期", "星期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]
+            
+            if not data:
+                return pd.DataFrame(columns=ui_columns)
+            
+            df = pd.DataFrame(data)
 
-        if "項次" in df.columns:
-            df = df.drop(columns=["項次"])
-        
-        for col in ui_columns:
-            if col not in df.columns:
-                df[col] = ""
+            if "項次" in df.columns:
+                df = df.drop(columns=["項次"])
+            
+            for col in ui_columns:
+                if col not in df.columns:
+                    df[col] = ""
 
-        df["日期"] = pd.to_datetime(df["日期"], errors='coerce').dt.date
-        df = df.dropna(subset=["日期"]) 
+            df["日期"] = pd.to_datetime(df["日期"], errors='coerce').dt.date
+            df = df.dropna(subset=["日期"]) 
 
-        mask = (df["日期"] >= start_date) & (df["日期"] <= end_date)
-        filtered_df = df.loc[mask].copy()
+            mask = (df["日期"] >= start_date) & (df["日期"] <= end_date)
+            filtered_df = df.loc[mask].copy()
+            
+            filtered_df = filtered_df.sort_values(by=["日期"], ascending=False)
+            return filtered_df[ui_columns]
         
-        filtered_df = filtered_df.sort_values(by=["日期"], ascending=False)
-        return filtered_df[ui_columns]
-    except Exception as e:
-        logging.error(f"Failed to load data from sheet: {e}")
-        return pd.DataFrame()
+        except APIError as e:
+            if "429" in str(e) or "Quota exceeded" in str(e):
+                if attempt < max_retries - 1:
+                    wait_time = rate_limiter.handle_error(attempt + 1)
+                    logging.warning(f"API 429 error, waiting {wait_time}s before retry")
+                    continue
+                else:
+                    logging.error(f"API quota exceeded after {max_retries} retries")
+                    raise
+            else:
+                logging.error(f"API error: {e}")
+                raise
+        except Exception as e:
+            logging.error(f"Failed to load data from sheet: {e}")
+            return pd.DataFrame()
+    
+    return pd.DataFrame()
 
 def get_all_sales_names(all_ws_objects):
     """直接從已抓取的 Worksheet 物件列表中篩選名稱"""
     sales_names = []
     for ws in all_ws_objects:
         title = ws.title
-        # 排除系統分頁
         if title not in SYSTEM_SHEETS and not title.startswith("整套_") and "經銷" not in title:
             sales_names.append(title)
     return sales_names
@@ -141,13 +185,11 @@ def show(client, db_name, user_email, real_name, is_manager):
 
         all_sales = get_all_sales_names(all_ws_objects)
         
-        # 使用中文名單比對
         valid_direct_names = [name for name in DIRECT_SALES_NAMES if name in all_sales]
         valid_dist_names = [name for name in DISTRIBUTOR_SALES_NAMES if name in all_sales]
         
         menu_options = SPECIAL_OPTS + sorted(all_sales)
 
-        # 互斥選取 Callback
         def on_selection_change():
             current = st.session_state.overview_sales_select
             previous = st.session_state.overview_sales_prev
@@ -204,55 +246,62 @@ def show(client, db_name, user_email, real_name, is_manager):
 
     st.markdown("---")
     
-    # === 3. 【修復】讀取與顯示 (速度優化版 + 錯誤處理) ===
+    # === 3. 【修復】讀取與顯示 (智慧速率限制版) ===
     all_data = []
     
-    # 【修復】限制最大查詢人數 (防止過度消耗 API)
-    MAX_USERS = 50
+    # 【修復】限制最大查詢人數
+    MAX_USERS = 30  # 降低至 30 人以減少 API 壓力
     if len(target_users) > MAX_USERS:
         st.error(f"⚠️ 一次最多查詢 {MAX_USERS} 位業務員，請縮小範圍")
+        st.info("💡 建議使用「直賣全員」或「經銷全員」群組，或手動選擇少數人員")
         return
     
-    with st.spinner(f"正在彙整 {len(target_users)} 位業務員的資料... (加速讀取中)"):
+    # 【修復】顯示預估時間
+    estimated_time = len(target_users) * rate_limiter.current_delay
+    st.info(f"⏱️ 正在讀取 {len(target_users)} 位業務員資料 (預計需時 {estimated_time:.1f} 秒)")
+    
+    with st.spinner(f"彙整中... (使用智慧速率限制以避免超載)"):
         progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        failed_users = []
         
         for idx, user_name in enumerate(target_users):
+            status_text.text(f"正在讀取: {user_name} ({idx+1}/{len(target_users)})")
             ws = ws_map.get(user_name)
             
             if ws:
-                # 重試機制
-                max_retries = 3
-                for attempt in range(max_retries):
-                    try:
-                        df = load_data_from_sheet(ws, start_date, end_date)
-                        if not df.empty:
-                            df.insert(0, "業務員", user_name)
-                            all_data.append(df)
-                        break 
+                try:
+                    # 【修復】使用智慧延遲
+                    rate_limiter.wait()
                     
-                    except APIError as e:
-                        # 只有在遇到 429 時才進入慢速等待
-                        if "429" in str(e) or "Quota exceeded" in str(e):
-                            if attempt < max_retries - 1:
-                                wait_time = (attempt + 1) * 3
-                                st.toast(f"⚠️ 流量滿載，暫停 {wait_time} 秒後重試...", icon="⏳")
-                                time.sleep(wait_time)
-                            else:
-                                st.error(f"無法讀取 {user_name} (流量超限)。")
-                                logging.error(f"API quota exceeded for {user_name}")
-                        else:
-                            logging.error(f"API error for {user_name}: {e}")
-                            break
-                    except Exception as e:
-                        logging.error(f"Unexpected error loading {user_name}: {e}")
-                        break
+                    df = load_data_from_sheet(ws, start_date, end_date)
+                    if not df.empty:
+                        df.insert(0, "業務員", user_name)
+                        all_data.append(df)
+                
+                except APIError as e:
+                    if "429" in str(e):
+                        failed_users.append(user_name)
+                        st.warning(f"⚠️ {user_name} 讀取失敗 (API 超載)，請稍後重試")
+                        logging.error(f"API 429 for {user_name}")
+                    else:
+                        failed_users.append(user_name)
+                        logging.error(f"API error for {user_name}: {e}")
+                
+                except Exception as e:
+                    failed_users.append(user_name)
+                    logging.error(f"Unexpected error loading {user_name}: {e}")
             
-            # 正常情況下只等待 0.1 秒
-            time.sleep(0.1) 
             progress_bar.progress((idx + 1) / len(target_users))
         
-        time.sleep(0.1)
+        status_text.empty()
         progress_bar.empty()
+        
+        # 顯示失敗名單
+        if failed_users:
+            st.error(f"❌ 以下 {len(failed_users)} 位業務員資料讀取失敗: {', '.join(failed_users)}")
+            st.info("💡 建議: 等待 1 分鐘後重新查詢，或減少一次查詢的人數")
 
     if not all_data:
         st.info("🔍 所選區間內無資料。")
@@ -270,7 +319,7 @@ def show(client, db_name, user_email, real_name, is_manager):
     # 詳細表格
     st.subheader("📝 詳細列表")
     
-    # 【修復】限制顯示筆數 (防止頁面過載)
+    # 【修復】限制顯示筆數
     MAX_DISPLAY_ROWS = 1000
     if len(final_df) > MAX_DISPLAY_ROWS:
         st.warning(f"⚠️ 資料過多，僅顯示前 {MAX_DISPLAY_ROWS} 筆 (下載 CSV 可取得完整資料)")
@@ -288,10 +337,9 @@ def show(client, db_name, user_email, real_name, is_manager):
         }
     )
 
-    # 【修復】匯出 CSV (加入防護)
+    # 【修復】匯出 CSV
     fname = f"業務日報彙整_{start_date}_{end_date}.csv"
     
-    # 清理所有欄位
     export_df = final_df.copy()
     export_df = export_df.applymap(sanitize_csv_field)
     
