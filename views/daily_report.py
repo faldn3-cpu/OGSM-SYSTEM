@@ -10,6 +10,9 @@ import json
 # 請確保此 ID 在 LINE Developers Console 已開啟 "Share Target Picker" 權限
 LIFF_ID = "2008945289-UvXWe3BK"
 
+# === 設定您的 App 網址 (用於登入後跳轉回來) ===
+APP_URL = "https://seec-sales-system.streamlit.app"
+
 def get_tw_time():
     tw_tz = timezone(timedelta(hours=8))
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
@@ -279,13 +282,9 @@ def show(client, db_name, user_email, real_name):
         msg_text = "\n".join(msg_lines)
         
         # === JS Escaping (防止文字中斷 JS 程式碼) ===
-        # 將 Python 字串轉換為 JSON 格式字串，這樣在 JS 中就是安全的
         safe_msg_json = json.dumps(msg_text) 
 
-        # === 嵌入 LIFF JavaScript ===
-        # 使用 Streamlit Component 嵌入 HTML/JS
-        # 這會產生一個使用 LIFF SDK 的按鈕
-        
+        # === 嵌入 LIFF JavaScript (增強版: 含 Redirect Logic) ===
         liff_script = f"""
         <html>
         <head>
@@ -317,36 +316,39 @@ def show(client, db_name, user_email, real_name):
         </head>
         <body>
             <button id="sendBtn" class="liff-btn" onclick="sendLiffMessage()">🚀 開啟 LINE 選擇好友傳送</button>
-            <div id="status" class="status">準備就緒</div>
+            <div id="status" class="status">系統準備中...</div>
 
             <script>
-                // 1. 初始化 LIFF
+                // 填入後端定義好的變數
+                const LIFF_ID = "{LIFF_ID}";
+                const APP_URL = "{APP_URL}"; 
+
                 async function initializeLiff() {{
                     try {{
-                        await liff.init({{ liffId: "{LIFF_ID}" }});
+                        await liff.init({{ liffId: LIFF_ID }});
+                        
+                        // 檢查是否已登入
                         if (!liff.isLoggedIn()) {{
-                            // 如果沒登入，按鈕點擊會先觸發登入
-                            document.getElementById("status").innerText = "請點擊按鈕登入 LINE";
+                            document.getElementById("status").innerText = "尚未登入，點擊按鈕將進行登入...";
                         }} else {{
-                            document.getElementById("status").innerText = "已登入 LINE，可發送";
+                            document.getElementById("status").innerText = "✅ LINE 已連線，可發送";
                         }}
                     }} catch (err) {{
-                        document.getElementById("status").innerText = "LIFF 初始化失敗: " + err;
+                        document.getElementById("status").innerText = "初始化錯誤 (請檢查 ID/網址): " + err;
                     }}
                 }}
 
-                // 2. 發送訊息邏輯
                 async function sendLiffMessage() {{
-                    if (!liff.isInClient() && !liff.isLoggedIn()) {{
-                        liff.login();
-                        return;
-                    }}
+                    try {{
+                        // === 關鍵修正：若未登入，強制跳轉回 App 網址 ===
+                        if (!liff.isInClient() && !liff.isLoggedIn()) {{
+                            liff.login({{ redirectUri: APP_URL }});
+                            return;
+                        }}
 
-                    const message = {safe_msg_json}; // 從 Python 注入的訊息
+                        const message = {safe_msg_json}; 
 
-                    // 檢查是否支援 shareTargetPicker
-                    if (liff.isApiAvailable('shareTargetPicker')) {{
-                        try {{
+                        if (liff.isApiAvailable('shareTargetPicker')) {{
                             const res = await liff.shareTargetPicker([
                                 {{
                                     type: "text",
@@ -356,17 +358,17 @@ def show(client, db_name, user_email, real_name):
                             if (res) {{
                                 document.getElementById("status").innerText = "✅ 發送成功！";
                             }} else {{
-                                document.getElementById("status").innerText = "❌ 發送取消";
+                                document.getElementById("status").innerText = "❌ 取消發送";
                             }}
-                        }} catch (error) {{
-                            document.getElementById("status").innerText = "❌ 發送失敗 (請檢查 LIFF 權限): " + error;
+                        }} else {{
+                            document.getElementById("status").innerText = "⚠️ 此裝置不支援直接選人，請登入手機版 LINE 使用。";
+                            alert("請使用手機版 LINE 操作，或手動複製下方文字。");
                         }}
-                    }} else {{
-                        document.getElementById("status").innerText = "❌ 您的環境不支援選擇好友功能";
+                    }} catch (error) {{
+                        document.getElementById("status").innerText = "❌ 執行錯誤: " + error;
                     }}
                 }}
 
-                // 啟動
                 initializeLiff();
             </script>
         </body>
@@ -377,7 +379,6 @@ def show(client, db_name, user_email, real_name):
         
         with col_btn:
             st.info("👇 使用 LIFF 強力傳送 (支援電腦/手機)")
-            # 設定高度為 100px 以容納按鈕和狀態文字
             components.html(liff_script, height=120)
             
         with col_copy:
