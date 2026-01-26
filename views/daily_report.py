@@ -85,8 +85,57 @@ def rate_limit_save(max_calls=5, period=60):
 #  工具函式
 # ==========================================
 def get_tw_time():
+    """標準系統時間格式 (YYYY-MM-DD HH:MM:SS)"""
     tw_tz = timezone(timedelta(hours=8))
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+def get_crm_time_str():
+    """
+    【新增】CRM 專用時間格式
+    格式範例: 2026/1/26 下午 4:15:05
+    """
+    tw_tz = timezone(timedelta(hours=8))
+    now = datetime.now(tw_tz)
+    
+    year = now.year
+    month = now.month
+    day = now.day
+    hour = now.hour
+    minute = now.minute
+    second = now.second
+    
+    # 判斷上午/下午
+    ampm = "上午" if hour < 12 else "下午"
+    
+    # 轉換為 12 小時制
+    display_hour = hour % 12
+    if display_hour == 0:
+        display_hour = 12
+        
+    # 格式化: 2026/1/26 下午 4:15:05 (注意月份與日期不補零)
+    return f"{year}/{month}/{day} {ampm} {display_hour}:{minute:02d}:{second:02d}"
+
+def format_crm_date(date_val):
+    """
+    【新增】CRM 專用日期格式
+    輸入: 2026-01-26 (字串或物件)
+    輸出: 2026/1/26 (字串)
+    """
+    if not date_val: return ""
+    try:
+        # 如果已經是字串，先解析
+        if isinstance(date_val, str):
+            # 處理可能的時間格式
+            date_val = date_val.split(" ")[0] # 取出日期部分
+            d = datetime.strptime(date_val, "%Y-%m-%d")
+        elif isinstance(date_val, (date, datetime)):
+            d = date_val
+        else:
+            return str(date_val)
+            
+        return f"{d.year}/{d.month}/{d.day}"
+    except:
+        return str(date_val)
 
 def get_default_range(today):
     weekday_idx = today.weekday()
@@ -237,8 +286,12 @@ def save_to_crm_sheet(client, data_dict):
         except:
             ws = sh.sheet1
         
+        # 【修正】使用專用的格式轉換函式
+        timestamp_str = get_crm_time_str()             # 格式: 2026/1/26 下午 4:15:05
+        date_str = format_crm_date(data_dict.get("拜訪日期", "")) # 格式: 2026/1/22
+        
         row_data = [
-            get_tw_time(),                  # A1
+            timestamp_str,                  # A1 時間戳記
             data_dict.get("填寫人", ""),     # B1
             data_dict.get("客戶名稱", ""),   # C1
             data_dict.get("通路商", ""),     # D1
@@ -247,7 +300,7 @@ def save_to_crm_sheet(client, data_dict):
             data_dict.get("客戶性質", ""),   # G1
             data_dict.get("流失取回", ""),   # H1
             data_dict.get("產業別", ""),     # I1
-            str(data_dict.get("拜訪日期", "")), # J1
+            date_str,                       # J1 拜訪日期
             data_dict.get("推廣產品", ""),   # K1
             data_dict.get("工作內容", ""),   # L1
             data_dict.get("產出日期", ""),   # M1
@@ -371,7 +424,6 @@ def show(client, db_name, user_email, real_name):
     st.write("")
     st.subheader(f"📋 工作清單 ({start_date} ~ {end_date})")
     
-    # ⚠️ 這裡修改了 key，確保 UI 強制更新
     edited_df = st.data_editor(
         current_df,
         num_rows="dynamic",
@@ -387,7 +439,7 @@ def show(client, db_name, user_email, real_name):
             "實際行程": st.column_config.TextColumn("實際行程", width="large"),
             "最後更新時間": st.column_config.TextColumn("更新時間", disabled=True, width="small")
         },
-        key="data_editor_grid_v2" 
+        key="data_editor_grid_v3" 
     )
 
     if st.button("💾 儲存修改 (表格編輯後請按我)", type="secondary", use_container_width=True):
@@ -410,7 +462,7 @@ def show(client, db_name, user_email, real_name):
     st.markdown("---")
 
     # ==========================================
-    #  Part 2.5: 同步至客戶關係表單 (新增功能)
+    #  Part 2.5: 同步至客戶關係表單
     # ==========================================
     st.subheader("🔗 同步至客戶關係表單")
 
