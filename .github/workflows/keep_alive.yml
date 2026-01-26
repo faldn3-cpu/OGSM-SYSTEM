@@ -1,0 +1,27 @@
+name: Keep Streamlit Alive
+
+on:
+  schedule:
+    # 設定每天早上 8:00 (UTC 0:00) 執行一次
+    - cron: "0 0 * * *"
+  workflow_dispatch: # 允許您在 GitHub 介面上手動按按鈕測試
+
+permissions:
+  contents: write  # <--- 這行就是關鍵，給予寫入權限，不用密碼
+
+jobs:
+  keep-alive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Empty Commit
+        run: |
+          # 這裡設定機器人的假身份，不需要真實帳號
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          # 提交一個空更新
+          git commit --allow-empty -m "💪 Keep Alive: Prevent Streamlit Sleep"
+          # 推送回 GitHub
+          git push
