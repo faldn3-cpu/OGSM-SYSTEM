@@ -7,7 +7,7 @@ from functools import wraps
 import logging
 
 # ==========================================
-#  安全性設定:速率限制
+#  安全性設定：速率限制
 # ==========================================
 save_rate_limits = {}
 
@@ -28,7 +28,7 @@ def rate_limit_save(max_calls=5, period=60):
             ]
             
             if len(save_rate_limits[user_email]) >= max_calls:
-                st.error(f"⚠️ 儲存過於頻繁,請 {period} 秒後再試")
+                st.error(f"⚠️ 儲存過於頻繁，請 {period} 秒後再試")
                 logging.warning(f"Rate limit exceeded for {user_email} on {func.__name__}")
                 return False, "速率限制"
             
@@ -47,11 +47,11 @@ def get_tw_time():
 def get_smart_date_range(option):
     """
     根據選項計算日期區間
-    結束日期規則:今天+1,若遇週末則順延至下週一
+    結束日期規則：今天+1，若遇週末則順延至下週一
     """
     today = date.today()
     
-    # 計算結束日期 (當天+1,跳過週末)
+    # 計算結束日期 (當天+1，跳過週末)
     end_date = today + timedelta(days=1)
     while end_date.weekday() >= 5:  # 5=週六, 6=週日
         end_date += timedelta(days=1)
@@ -100,8 +100,8 @@ def get_or_create_user_sheet(client, db_name, real_name):
 # 【強化修正】Session State 快取讀取函式 (含格式驗證)
 def load_data_by_range_cached(ws, start_date, end_date):
     """
-    快取版讀取函式:
-    如果 Session State 中已有該區間的資料,直接回傳,避免一直讀取 Google Sheets。
+    快取版讀取函式：
+    如果 Session State 中已有該區間的資料，直接回傳，避免一直讀取 Google Sheets。
     """
     cache_key = f"data_{start_date}_{end_date}"
     
@@ -110,7 +110,7 @@ def load_data_by_range_cached(ws, start_date, end_date):
     if "daily_data_key" not in st.session_state:
         st.session_state.daily_data_key = ""
 
-    # 1. 嘗試讀取快取,並驗證格式是否正確
+    # 1. 嘗試讀取快取，並驗證格式是否正確
     cache_valid = False
     cached_obj = st.session_state.daily_data_cache
     
@@ -123,7 +123,7 @@ def load_data_by_range_cached(ws, start_date, end_date):
     if cache_valid:
         return cached_obj
 
-    # 2. 如果快取失效或不存在,執行重新讀取
+    # 2. 如果快取失效或不存在，執行重新讀取
     try:
         data = ws.get_all_records()
         ui_columns = ["日期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]
@@ -150,12 +150,12 @@ def load_data_by_range_cached(ws, start_date, end_date):
         return result
     except Exception as e:
         logging.error(f"Failed to load data: {e}")
-        # 發生錯誤時回傳空 DataFrame,確保不會 TypeError
+        # 發生錯誤時回傳空 DataFrame，確保不會 TypeError
         return pd.DataFrame(columns=["日期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]), pd.DataFrame()
 
 @rate_limit_save(max_calls=5, period=60)
 def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
-    """將目前的 DataFrame 完整存回 Google Sheet,並清除快取"""
+    """將目前的 DataFrame 完整存回 Google Sheet，並清除快取"""
     try:
         # 1. 整理 current_df
         current_df["日期"] = pd.to_datetime(current_df["日期"], errors='coerce').dt.date
@@ -193,7 +193,7 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
         ws.clear()
         ws.update(values=val_list, range_name='A1')
         
-        # 儲存後清除快取,確保下次讀到最新
+        # 儲存後清除快取，確保下次讀到最新
         if "daily_data_cache" in st.session_state:
             del st.session_state.daily_data_cache
 
@@ -224,28 +224,25 @@ def show(client, db_name, user_email, real_name):
     ws = get_or_create_user_sheet(client, db_name, real_name)
     if not ws: return
 
-    # === 【修正】日期區間選擇邏輯 - 完全移除 date_input ===
-    st.markdown("### 📅 資料顯示區間")
-    
-    # 使用 radio 取代 date_input
-    range_option = st.radio(
-        "選擇區間 (為避免系統過載,限制最大顯示範圍)",
-        ["1週", "2週", "1個月"],
-        horizontal=True,
-        index=0,
-        key="daily_range_option"
-    )
+    # === 【修正】日期區間選擇邏輯 ===
+    with st.expander("📅 切換資料顯示區間", expanded=False):
+        range_option = st.radio(
+            "選擇區間 (為避免系統過載，限制最大顯示範圍)",
+            ["1週", "2週", "1個月"],
+            horizontal=True,
+            index=0
+        )
     
     # 計算日期
     start_date, end_date = get_smart_date_range(range_option)
     
     # 顯示目前區間提示
-    st.caption(f"目前顯示範圍: {start_date} ~ {end_date}")
+    st.caption(f"目前顯示範圍：{start_date} ~ {end_date}")
 
     # 1. 讀取資料
     cached_current_df, all_df = load_data_by_range_cached(ws, start_date, end_date)
     
-    # 2. 建立副本 (防止污染快取)
+    # 2. 建立副本 (防止汙染快取)
     current_df = cached_current_df.copy()
 
     # 3. 處理「選取」欄位
@@ -273,7 +270,7 @@ def show(client, db_name, user_email, real_name):
         c1, c2 = st.columns([1, 1])
         with c1:
             # 預設新增日期為今天
-            inp_date = st.date_input("日期", date.today(), key="new_work_date")
+            inp_date = st.date_input("日期", date.today())
         with c2:
             inp_type = st.selectbox("客戶分類", 
                 ["請選擇", "(A) 直賣A級", "(B) 直賣B級", "(C) 直賣C級", "(D-A) 經銷A級", "(D-B) 經銷B級", "(D-C) 經銷C級", "(O) 其它"],
@@ -407,8 +404,8 @@ def show(client, db_name, user_email, real_name):
                 if not c_name and not job and not result: continue
 
                 msg_lines.append(f"🏢 {c_name} {cat}")
-                if job: msg_lines.append(f"📋 計畫:{job}")
-                if result: msg_lines.append(f"✅ 實績:{result}")
+                if job: msg_lines.append(f"📋 計畫：{job}")
+                if result: msg_lines.append(f"✅ 實績：{result}")
                 msg_lines.append("---")
             
         final_msg = "\n".join(msg_lines)
