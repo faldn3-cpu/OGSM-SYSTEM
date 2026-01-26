@@ -17,7 +17,7 @@ CRM_OPT_CHANNEL = ["直販", "二次店", "上控廠商", "經銷商", "其他"]
 CRM_OPT_COMP_CHANNEL = ["無", "能麒", "上菱", "強力", "日遠", "耀毅", "三菱其他通路(瀚衛、惠控、雙象)", "羅昇", "友士", "碁電", "其他"]
 # 行動方案
 CRM_OPT_ACTION = ["出差到客戶端拜訪", "電話聯繫", "報價事宜", "其他"]
-# 是否為流失客戶取回 (依照您提供的清單展開)
+# 是否為流失客戶取回
 CRM_OPT_LOST_RECOVERY = [
     "無",
     "曾仁君 - 新林電機", "曾仁君 - 新碩自動",
@@ -45,7 +45,7 @@ CRM_OPT_EST_DATE = [
 ]
 # 競爭品牌
 CRM_OPT_COMP_BRAND = ["台灣品牌", "日系品牌", "歐系品牌", "其他品牌"]
-# 客戶所屬 (參考常用名單)
+# 客戶所屬
 CRM_OPT_OWNER = [
     "曾維崧", "張何達", "曾仁君", "溫達仁", "楊家豪", "莊富丞", "謝瑞騏", "何宛茹", "張書偉", "周柏翰", "葉仁豪", "其他"
 ]
@@ -126,8 +126,7 @@ def get_or_create_user_sheet(client, db_name, real_name):
 # 【強化修正】Session State 快取讀取函式 (含格式驗證)
 def load_data_by_range_cached(ws, start_date, end_date):
     """
-    快取版讀取函式：
-    如果 Session State 中已有該區間的資料，直接回傳，避免一直讀取 Google Sheets。
+    快取版讀取函式
     """
     cache_key = f"data_{start_date}_{end_date}"
     
@@ -136,7 +135,7 @@ def load_data_by_range_cached(ws, start_date, end_date):
     if "daily_data_key" not in st.session_state:
         st.session_state.daily_data_key = ""
 
-    # 1. 嘗試讀取快取，並驗證格式是否正確
+    # 1. 嘗試讀取快取
     cache_valid = False
     cached_obj = st.session_state.daily_data_cache
     
@@ -149,7 +148,7 @@ def load_data_by_range_cached(ws, start_date, end_date):
     if cache_valid:
         return cached_obj
 
-    # 2. 如果快取失效或不存在，執行重新讀取
+    # 2. 重新讀取
     try:
         data = ws.get_all_records()
         ui_columns = ["日期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]
@@ -170,13 +169,11 @@ def load_data_by_range_cached(ws, start_date, end_date):
             display_df = filtered_df[ui_columns].copy() if not filtered_df.empty else pd.DataFrame(columns=ui_columns)
             result = (display_df, df)
 
-        # 寫入快取
         st.session_state.daily_data_cache = result
         st.session_state.daily_data_key = cache_key
         return result
     except Exception as e:
         logging.error(f"Failed to load data: {e}")
-        # 發生錯誤時回傳空 DataFrame，確保不會 TypeError
         return pd.DataFrame(columns=["日期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]), pd.DataFrame()
 
 @rate_limit_save(max_calls=5, period=60)
@@ -189,7 +186,7 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
         current_df["星期"] = current_df["日期"].apply(lambda x: get_weekday_str(x))
         current_df["最後更新時間"] = get_tw_time()
         
-        # 2. 整理 all_df (保留區間外的資料)
+        # 2. 整理 all_df
         if not all_df.empty and "日期" in all_df.columns:
             all_df["日期"] = pd.to_datetime(all_df["日期"], errors='coerce').dt.date
             mask_keep = (all_df["日期"] < start_date) | (all_df["日期"] > end_date)
@@ -197,15 +194,15 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
         else:
             remaining_df = pd.DataFrame()
 
-        # 3. 合併 (自動忽略 current_df 中的額外欄位如 '選取')
+        # 3. 合併
         final_df = pd.concat([remaining_df, current_df], ignore_index=True)
         final_df = final_df.sort_values(by=["日期"], ascending=True)
 
-        # 4. 重新編號項次
+        # 4. 重新編號
         if "項次" in final_df.columns: final_df = final_df.drop(columns=["項次"])
         final_df.insert(0, "項次", range(1, len(final_df) + 1))
 
-        # 5. 確保欄位順序 (排除 '選取' 欄位)
+        # 5. 確保欄位順序
         cols_order = ["項次", "日期", "星期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]
         for c in cols_order:
             if c not in final_df.columns: final_df[c] = ""
@@ -219,7 +216,6 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
         ws.clear()
         ws.update(values=val_list, range_name='A1')
         
-        # 儲存後清除快取，確保下次讀到最新
         if "daily_data_cache" in st.session_state:
             del st.session_state.daily_data_cache
 
@@ -236,36 +232,30 @@ def save_to_crm_sheet(client, data_dict):
     """將資料寫入客戶關係表單 (回覆)"""
     try:
         sh = client.open(CRM_DB_NAME)
-        # 通常回應表單會在 "表單回應 1"，若找不到則嘗試第一個工作表
         try:
             ws = sh.worksheet("表單回應 1")
         except:
             ws = sh.sheet1
         
-        # 欄位順序對應 (A-R)
-        # A:時間戳記, B:填寫人, C:客戶名稱, D:通路商, E:競爭通路, F:行動方案
-        # G:客戶性質, H:流失取回, I:產業別, J:拜訪日期, K:推廣產品
-        # L:目的/案件/設備, M:產出日期, N:總金額, O:依賴事項, P:狀況說明, Q:競爭品牌, R:客戶所屬
-        
         row_data = [
-            get_tw_time(),                  # A1 時間戳記
-            data_dict.get("填寫人", ""),     # B1 填寫人
-            data_dict.get("客戶名稱", ""),   # C1 客戶名稱
-            data_dict.get("通路商", ""),     # D1 通路商
-            data_dict.get("競爭通路", ""),   # E1 競爭通路
-            data_dict.get("行動方案", ""),   # F1 行動方案
-            data_dict.get("客戶性質", ""),   # G1 客戶性質
-            data_dict.get("流失取回", ""),   # H1 流失取回
-            data_dict.get("產業別", ""),     # I1 產業別
-            str(data_dict.get("拜訪日期", "")), # J1 拜訪日期
-            data_dict.get("推廣產品", ""),   # K1 推廣產品
-            data_dict.get("工作內容", ""),   # L1 目的/案件/設備
-            data_dict.get("產出日期", ""),   # M1 預計產出日期
-            data_dict.get("總金額", ""),     # N1 總金額
-            data_dict.get("依賴事項", ""),   # O1 依賴事項
-            data_dict.get("實際行程", ""),   # P1 狀況說明
-            data_dict.get("競爭品牌", ""),   # Q1 競爭品牌
-            data_dict.get("客戶所屬", "")    # R1 客戶所屬
+            get_tw_time(),                  # A1
+            data_dict.get("填寫人", ""),     # B1
+            data_dict.get("客戶名稱", ""),   # C1
+            data_dict.get("通路商", ""),     # D1
+            data_dict.get("競爭通路", ""),   # E1
+            data_dict.get("行動方案", ""),   # F1
+            data_dict.get("客戶性質", ""),   # G1
+            data_dict.get("流失取回", ""),   # H1
+            data_dict.get("產業別", ""),     # I1
+            str(data_dict.get("拜訪日期", "")), # J1
+            data_dict.get("推廣產品", ""),   # K1
+            data_dict.get("工作內容", ""),   # L1
+            data_dict.get("產出日期", ""),   # M1
+            data_dict.get("總金額", ""),     # N1
+            data_dict.get("依賴事項", ""),   # O1
+            data_dict.get("實際行程", ""),   # P1
+            data_dict.get("競爭品牌", ""),   # Q1
+            data_dict.get("客戶所屬", "")    # R1
         ]
         
         ws.append_row(row_data)
@@ -277,10 +267,9 @@ def save_to_crm_sheet(client, data_dict):
 # ==========================================
 #  輸入驗證與清理
 # ==========================================
-MAX_FIELD_LENGTH = 5000  # 最大字元數
+MAX_FIELD_LENGTH = 5000
 
 def sanitize_input(text, max_length=MAX_FIELD_LENGTH):
-    """清理使用者輸入 (防止超長字串與惡意內容)"""
     if not text: return ""
     text = str(text).strip()
     if len(text) > max_length:
@@ -305,21 +294,15 @@ def show(client, db_name, user_email, real_name):
     elif isinstance(date_range, tuple) and len(date_range) == 1: start_date = end_date = date_range[0]
     else: start_date = end_date = today
 
-    # 1. 讀取資料 (使用強化版快取函式)
     cached_current_df, all_df = load_data_by_range_cached(ws, start_date, end_date)
-    
-    # 2. 建立副本 (防止汙染快取)
     current_df = cached_current_df.copy()
 
     # 3. 處理「選取」欄位
     if not current_df.empty:
-        # 強制移除已存在的「選取」欄位 (解決 ValueError)
         if "選取" in current_df.columns:
             current_df = current_df.drop(columns=["選取"])
-            
         current_df.insert(0, "選取", False)
         
-        # 智慧預設:自動勾選「今天」與「明天」
         try:
             date_col = pd.to_datetime(current_df["日期"]).dt.date
             tomorrow = today + timedelta(days=1)
@@ -329,7 +312,7 @@ def show(client, db_name, user_email, real_name):
             pass
 
     # ==========================================
-    #  Part 1: 新增工作 (Mobile First)
+    #  Part 1: 新增工作
     # ==========================================
     st.markdown("### ➕ 新增工作")
     
@@ -348,7 +331,6 @@ def show(client, db_name, user_email, real_name):
         inp_result = st.text_area("實際行程", placeholder="輸入當日實際行程", height=100, max_chars=MAX_FIELD_LENGTH)
 
         if st.button("➕ 加入清單", type="primary", use_container_width=True):
-            # 驗證輸入
             inp_client = sanitize_input(inp_client)
             inp_content = sanitize_input(inp_content)
             inp_result = sanitize_input(inp_result)
@@ -365,7 +347,6 @@ def show(client, db_name, user_email, real_name):
                     "最後更新時間": get_tw_time()
                 }])
                 
-                # 合併到當前顯示的 DataFrame (先移除選取欄位以免干擾儲存)
                 if "選取" in current_df.columns:
                     df_to_save = current_df.drop(columns=["選取"])
                 else:
@@ -380,16 +361,17 @@ def show(client, db_name, user_email, real_name):
                         time.sleep(1)
                         st.rerun()
                     elif msg == "速率限制":
-                        pass  # 錯誤訊息已在 decorator 中顯示
+                        pass
                     else:
                         st.error(f"儲存失敗: {msg}")
 
     # ==========================================
-    #  Part 2: 檢視與編輯清單 (含勾選功能)
+    #  Part 2: 檢視與編輯清單
     # ==========================================
     st.write("")
     st.subheader(f"📋 工作清單 ({start_date} ~ {end_date})")
     
+    # ⚠️ 這裡修改了 key，確保 UI 強制更新
     edited_df = st.data_editor(
         current_df,
         num_rows="dynamic",
@@ -405,15 +387,12 @@ def show(client, db_name, user_email, real_name):
             "實際行程": st.column_config.TextColumn("實際行程", width="large"),
             "最後更新時間": st.column_config.TextColumn("更新時間", disabled=True, width="small")
         },
-        key="data_editor_grid"
+        key="data_editor_grid_v2" 
     )
 
     if st.button("💾 儲存修改 (表格編輯後請按我)", type="secondary", use_container_width=True):
          with st.spinner("儲存變更中..."):
-            # 儲存前先移除「選取」欄位
             df_to_save = edited_df.drop(columns=["選取"]) if "選取" in edited_df.columns else edited_df
-            
-            # 驗證所有輸入
             for col in ["客戶名稱", "工作內容", "實際行程"]:
                 if col in df_to_save.columns:
                     df_to_save[col] = df_to_save[col].apply(lambda x: sanitize_input(x))
@@ -435,7 +414,6 @@ def show(client, db_name, user_email, real_name):
     # ==========================================
     st.subheader("🔗 同步至客戶關係表單")
 
-    # 檢查是否有勾選資料
     if "選取" in edited_df.columns:
         selected_crm_rows = edited_df[edited_df["選取"] == True].copy()
     else:
@@ -446,7 +424,6 @@ def show(client, db_name, user_email, real_name):
     elif len(selected_crm_rows) > 1:
         st.warning("⚠️ 為了確保資料完整性，一次請只勾選 **一筆** 資料進行詳細同步。")
     else:
-        # 取出該筆資料
         row = selected_crm_rows.iloc[0]
         st.success(f"已選取：{row['日期']} - {row['客戶名稱']}")
         
@@ -454,7 +431,6 @@ def show(client, db_name, user_email, real_name):
             with st.form("crm_sync_form"):
                 st.caption("以下資料部分已自動帶入，請補齊剩餘欄位：")
                 
-                # --- 第一列 ---
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     f_user = st.text_input("填寫人", value=real_name, disabled=True)
@@ -463,19 +439,16 @@ def show(client, db_name, user_email, real_name):
                 with c3:
                     f_client = st.text_input("客戶名稱", value=str(row["客戶名稱"]), disabled=True)
                 
-                # --- 第二列 (自動帶入) ---
                 c1, c2 = st.columns(2)
                 with c1:
                     f_type = st.text_input("客戶性質 (自動帶入)", value=str(row["客戶分類"]), disabled=True)
                 with c2:
-                    # 嘗試從工作內容或實際行程中抓取
                     f_content = st.text_area("拜訪目的/案件/設備 (自動帶入)", value=str(row["工作內容"]), height=68)
                     f_status_desc = st.text_area("案件狀況說明 (自動帶入)", value=str(row["實際行程"]), height=68, help="對應：實際行程")
 
                 st.markdown("---")
                 st.markdown("##### 📍 請補填以下資訊")
 
-                # --- 補填欄位 1 ---
                 col_a, col_b = st.columns(2)
                 with col_a:
                     f_owner = st.selectbox("客戶所屬 (偕同拜訪/擔當)", options=CRM_OPT_OWNER, index=0)
@@ -489,7 +462,6 @@ def show(client, db_name, user_email, real_name):
                     f_est_date = st.selectbox("案件預計產出日期", options=CRM_OPT_EST_DATE)
                     f_comp_brand = st.selectbox("競爭品牌", options=CRM_OPT_COMP_BRAND)
 
-                # --- 補填欄位 2 ---
                 f_lost_rec = st.selectbox("是否為流失客戶取回 (選填)", options=CRM_OPT_LOST_RECOVERY)
                 
                 c_money, c_dep = st.columns([1, 2])
@@ -498,11 +470,9 @@ def show(client, db_name, user_email, real_name):
                 with c_dep:
                     f_dependency = st.text_input("依賴事項 (選填)")
 
-                # --- 送出按鈕 ---
                 submitted = st.form_submit_button("🚀 確認上傳至客戶關係表單", type="primary", use_container_width=True)
                 
                 if submitted:
-                    # 整理資料
                     crm_data = {
                         "填寫人": f_user,
                         "客戶名稱": f_client,
@@ -533,11 +503,10 @@ def show(client, db_name, user_email, real_name):
     st.markdown("---")
     
     # ==========================================
-    #  Part 3: 產生 LINE 文字 (勾選版)
+    #  Part 3: 產生 LINE 文字
     # ==========================================
     st.subheader("📤 產生 LINE 日報文字")
 
-    # 只抓取「被勾選 (True)」的資料
     if "選取" in edited_df.columns:
         selected_rows = edited_df[edited_df["選取"] == True].copy()
     else:
@@ -546,26 +515,20 @@ def show(client, db_name, user_email, real_name):
     if selected_rows.empty:
         st.info("💡 請在上方表格勾選要傳送的項目 (預設已勾選今天與明天)。")
     else:
-        # 按日期排序
         selected_rows = selected_rows.sort_values(by="日期")
-        
-        # 產生報表頭
         msg_lines = [f"【{real_name} 業務匯報】"]
-        
-        # 依照日期分組產生內容
         unique_dates = selected_rows["日期"].unique()
         
         for d in unique_dates:
             d_str = str(d)
             day_rows = selected_rows[selected_rows["日期"] == d]
             
-            # 【修正】修改文字邏輯
             header_suffix = ""
             try:
                 if d == today + timedelta(days=1): 
                     header_suffix = " (明日計畫)"
                 elif d == today: 
-                    header_suffix = " (今日實際行程)" # <--- 已修改此處
+                    header_suffix = " (今日實際行程)"
             except: 
                 pass
 
@@ -586,7 +549,5 @@ def show(client, db_name, user_email, real_name):
                 msg_lines.append("---")
             
         final_msg = "\n".join(msg_lines)
-        
-        # 使用 st.code 顯示
         st.code(final_msg, language="text")
         st.caption("👆 點擊右上角的「複製圖示」,即可貼到 LINE 群組。")
