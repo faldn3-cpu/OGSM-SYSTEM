@@ -180,7 +180,8 @@ def show(client, db_name, user_email, real_name, is_manager):
     with st.container(border=True):
         col1, col2 = st.columns([4, 1])
         with col1:
-            query = st.text_input("🔍 關鍵字搜尋", placeholder="例: SDE, 55KW, 變頻器...", max_chars=MAX_SEARCH_LENGTH, key="price_search_box", label_visibility="collapsed")
+            # 【修正 1】移除 placeholder 中的 "變頻器"
+            query = st.text_input("🔍 關鍵字搜尋", placeholder="例: SDE, 55KW...", max_chars=MAX_SEARCH_LENGTH, key="price_search_box", label_visibility="collapsed")
         with col2:
             search_btn = st.button("搜尋", use_container_width=True, type="primary")
 
@@ -199,6 +200,7 @@ def show(client, db_name, user_email, real_name, is_manager):
         try:
             mask = df.apply(lambda row: row.astype(str).str.contains(query, case=False, regex=False).any(), axis=1)
             result_df = df[mask]
+            # 這裡保留原本的搜尋紀錄，記錄寬泛的關鍵字 (例如: 線材)
             write_search_log(client, db_name, user_email, query, len(result_df))
         except Exception as e:
             st.error("搜尋發生錯誤")
@@ -272,6 +274,9 @@ def show(client, db_name, user_email, real_name, is_manager):
                         st.write("")
                         if base_price > 0:
                             if st.button("試算", key=f"btn_{idx}", use_container_width=True):
+                                # 【修正 2】點擊試算時，額外記錄一筆包含「產品名稱」的 Log
+                                # 這樣就能確保 Logs 裡面有 "AC05TB" 這樣的具體型號，而不只是 "線材"
+                                write_search_log(client, db_name, user_email, product_name, "試算選取")
                                 show_calculator_dialog(product_name, product_desc, base_price)
                         else:
                             st.caption("無法試算")
