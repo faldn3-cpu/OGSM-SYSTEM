@@ -44,11 +44,29 @@ def get_tw_time():
     tw_tz = timezone(timedelta(hours=8))
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 
-def get_default_range(today):
-    weekday_idx = today.weekday()
-    start = today - timedelta(days=weekday_idx)
-    end = today + timedelta(days=1) # 自動顯示到明天
-    return start, end
+def get_smart_date_range(option):
+    """
+    根據選項計算日期區間
+    結束日期規則：今天+1，若遇週末則順延至下週一
+    """
+    today = date.today()
+    
+    # 計算結束日期 (當天+1，跳過週末)
+    end_date = today + timedelta(days=1)
+    while end_date.weekday() >= 5:  # 5=週六, 6=週日
+        end_date += timedelta(days=1)
+    
+    # 計算起始日期
+    if option == "1週":
+        start_date = today - timedelta(weeks=1)
+    elif option == "2週":
+        start_date = today - timedelta(weeks=2)
+    elif option == "1個月":
+        start_date = today - timedelta(days=30)
+    else:
+        start_date = today - timedelta(weeks=1)
+        
+    return start_date, end_date
 
 def get_weekday_str(date_obj):
     if not isinstance(date_obj, (date, datetime)): return ""
@@ -206,17 +224,22 @@ def show(client, db_name, user_email, real_name):
     ws = get_or_create_user_sheet(client, db_name, real_name)
     if not ws: return
 
-    today = date.today()
-    def_start, def_end = get_default_range(today)
+    # === 【修正】日期區間選擇邏輯 ===
+    with st.expander("📅 切換資料顯示區間", expanded=False):
+        range_option = st.radio(
+            "選擇區間 (為避免系統過載，限制最大顯示範圍)",
+            ["1週", "2週", "1個月"],
+            horizontal=True,
+            index=0
+        )
     
-    with st.expander("📅 切換資料日期區間", expanded=False):
-        date_range = st.date_input("選擇區間", (def_start, def_end))
+    # 計算日期
+    start_date, end_date = get_smart_date_range(range_option)
     
-    if isinstance(date_range, tuple) and len(date_range) == 2: start_date, end_date = date_range
-    elif isinstance(date_range, tuple) and len(date_range) == 1: start_date = end_date = date_range[0]
-    else: start_date = end_date = today
+    # 顯示目前區間提示
+    st.caption(f"目前顯示範圍：{start_date} ~ {end_date}")
 
-    # 1. 讀取資料 (使用強化版快取函式)
+    # 1. 讀取資料
     cached_current_df, all_df = load_data_by_range_cached(ws, start_date, end_date)
     
     # 2. 建立副本 (防止汙染快取)
@@ -224,13 +247,12 @@ def show(client, db_name, user_email, real_name):
 
     # 3. 處理「選取」欄位
     if not current_df.empty:
-        # 強制移除已存在的「選取」欄位 (解決 ValueError)
         if "選取" in current_df.columns:
             current_df = current_df.drop(columns=["選取"])
             
         current_df.insert(0, "選取", False)
         
-        # 智慧預設:自動勾選「今天」與「明天」
+        today = date.today()
         try:
             date_col = pd.to_datetime(current_df["日期"]).dt.date
             tomorrow = today + timedelta(days=1)
@@ -247,7 +269,8 @@ def show(client, db_name, user_email, real_name):
     with st.container(border=True):
         c1, c2 = st.columns([1, 1])
         with c1:
-            inp_date = st.date_input("日期", today)
+            # 預設新增日期為今天
+            inp_date = st.date_input("日期", date.today())
         with c2:
             inp_type = st.selectbox("客戶分類", 
                 ["請選擇", "(A) 直賣A級", "(B) 直賣B級", "(C) 直賣C級", "(D-A) 經銷A級", "(D-B) 經銷B級", "(D-C) 經銷C級", "(O) 其它"],
@@ -259,7 +282,6 @@ def show(client, db_name, user_email, real_name):
         inp_result = st.text_area("實際行程", placeholder="輸入當日實際行程", height=100, max_chars=MAX_FIELD_LENGTH)
 
         if st.button("➕ 加入清單", type="primary", use_container_width=True):
-            # 驗證輸入
             inp_client = sanitize_input(inp_client)
             inp_content = sanitize_input(inp_content)
             inp_result = sanitize_input(inp_result)
@@ -276,7 +298,6 @@ def show(client, db_name, user_email, real_name):
                     "最後更新時間": get_tw_time()
                 }])
                 
-                # 合併到當前顯示的 DataFrame (先移除選取欄位以免干擾儲存)
                 if "選取" in current_df.columns:
                     df_to_save = current_df.drop(columns=["選取"])
                 else:
@@ -291,7 +312,7 @@ def show(client, db_name, user_email, real_name):
                         time.sleep(1)
                         st.rerun()
                     elif msg == "速率限制":
-                        pass  # 錯誤訊息已在 decorator 中顯示
+                        pass
                     else:
                         st.error(f"儲存失敗: {msg}")
 
@@ -321,10 +342,8 @@ def show(client, db_name, user_email, real_name):
 
     if st.button("💾 儲存修改 (表格編輯後請按我)", type="secondary", use_container_width=True):
          with st.spinner("儲存變更中..."):
-            # 儲存前先移除「選取」欄位
             df_to_save = edited_df.drop(columns=["選取"]) if "選取" in edited_df.columns else edited_df
             
-            # 驗證所有輸入
             for col in ["客戶名稱", "工作內容", "實際行程"]:
                 if col in df_to_save.columns:
                     df_to_save[col] = df_to_save[col].apply(lambda x: sanitize_input(x))
@@ -346,7 +365,6 @@ def show(client, db_name, user_email, real_name):
     # ==========================================
     st.subheader("📤 產生 LINE 日報文字")
 
-    # 只抓取「被勾選 (True)」的資料
     if "選取" in edited_df.columns:
         selected_rows = edited_df[edited_df["選取"] == True].copy()
     else:
@@ -355,26 +373,22 @@ def show(client, db_name, user_email, real_name):
     if selected_rows.empty:
         st.info("💡 請在上方表格勾選要傳送的項目 (預設已勾選今天與明天)。")
     else:
-        # 按日期排序
         selected_rows = selected_rows.sort_values(by="日期")
         
-        # 產生報表頭
         msg_lines = [f"【{real_name} 業務匯報】"]
-        
-        # 依照日期分組產生內容
         unique_dates = selected_rows["日期"].unique()
+        today = date.today()
         
         for d in unique_dates:
             d_str = str(d)
             day_rows = selected_rows[selected_rows["日期"] == d]
             
-            # 【修正】修改文字邏輯
             header_suffix = ""
             try:
                 if d == today + timedelta(days=1): 
                     header_suffix = " (明日計畫)"
                 elif d == today: 
-                    header_suffix = " (今日實際行程)" # <--- 已修改此處
+                    header_suffix = " (今日實際行程)"
             except: 
                 pass
 
@@ -396,6 +410,5 @@ def show(client, db_name, user_email, real_name):
             
         final_msg = "\n".join(msg_lines)
         
-        # 使用 st.code 顯示
         st.code(final_msg, language="text")
         st.caption("👆 點擊右上角的「複製圖示」,即可貼到 LINE 群組。")
