@@ -136,12 +136,12 @@ if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if 'user_email' not in st.session_state: st.session_state.user_email = ""
 if 'real_name' not in st.session_state: st.session_state.real_name = ""
 if 'login_attempts' not in st.session_state: st.session_state.login_attempts = 0
-# 【修正】預設頁面名稱更新 (含 Emoji)
 if 'page_radio' not in st.session_state: st.session_state.page_radio = "📝 OGSM日報系統"
 if 'role' not in st.session_state: st.session_state.role = "sales"
 if 'reset_stage' not in st.session_state: st.session_state.reset_stage = 0 
 if 'reset_otp' not in st.session_state: st.session_state.reset_otp = ""
 if 'reset_target_email' not in st.session_state: st.session_state.reset_target_email = ""
+if 'cleanup_checked' not in st.session_state: st.session_state.cleanup_checked = False
 
 # ==========================================
 #  🔒 安全性功能：速率限制器
@@ -198,6 +198,7 @@ def get_tw_time():
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 def write_log(action, user_email, note=""):
+    """寫入系統操作紀錄"""
     client = get_client()
     if not client: return
     try:
@@ -209,6 +210,97 @@ def write_log(action, user_email, note=""):
         ws.append_row([get_tw_time(), user_email, action, note])
     except Exception: pass
 
+def write_session_log(email, name, action="LOGIN"):
+    """寫入登入/登出紀錄到 Sessions"""
+    client = get_client()
+    if not client: return
+    try:
+        sh = client.open(PRICE_DB_NAME)
+        try: 
+            ws = sh.worksheet("Sessions")
+        except: 
+            ws = sh.add_worksheet(title="Sessions", rows=1000, cols=4)
+            ws.append_row(["時間", "使用者Email", "使用者姓名", "動作"])
+        
+        ws.append_row([get_tw_time(), email, name, action])
+    except Exception as e:
+        logging.warning(f"Failed to write session log: {e}")
+
+# ==========================================
+#  🧹 智慧型每月自動清理功能
+# ==========================================
+def auto_cleanup_logs(client):
+    """
+    自動清理 Logs, Sessions, SearchLogs 三個工作表。
+    保留最近 62 天資料。
+    """
+    if st.session_state.cleanup_checked:
+        return
+
+    try:
+        tw_tz = timezone(timedelta(hours=8))
+        now = datetime.now(tw_tz)
+        current_month_key = now.strftime("%Y-%m")
+
+        sh = client.open(PRICE_DB_NAME)
+        
+        need_cleanup = True
+        try:
+            logs_ws = sh.worksheet("Logs")
+            recent_logs = logs_ws.get_all_values()[-100:] 
+            for row in reversed(recent_logs):
+                if len(row) >= 3 and row[2] == "AUTO_CLEANUP":
+                    if row[0].startswith(current_month_key):
+                        need_cleanup = False
+                        break
+        except:
+            pass
+
+        if not need_cleanup:
+            st.session_state.cleanup_checked = True
+            return
+
+        with st.spinner("🔄 系統每月維護中，正在最佳化資料庫..."):
+            cutoff_date = now - timedelta(days=62)
+            cutoff_str = cutoff_date.strftime("%Y-%m-%d")
+            
+            target_sheets = ["Logs", "Sessions", "SearchLogs"]
+            cleaned_count = 0
+            
+            for sheet_name in target_sheets:
+                try:
+                    try: ws = sh.worksheet(sheet_name)
+                    except gspread.WorksheetNotFound: continue
+                        
+                    rows = ws.get_all_values()
+                    if not rows: continue
+                    
+                    header = rows[0]
+                    data_rows = rows[1:]
+                    if not data_rows: continue
+                    
+                    new_data = [row for row in data_rows if row and str(row[0]) >= cutoff_str]
+                    
+                    if len(new_data) < len(data_rows):
+                        ws.clear()
+                        ws.update(values=[header] + new_data, range_name='A1')
+                        cleaned_count += 1
+                        logging.info(f"Cleaned {sheet_name}: Removed {len(data_rows) - len(new_data)} rows")
+                except Exception as e:
+                    logging.error(f"Cleanup failed for {sheet_name}: {e}")
+
+            if cleaned_count >= 0:
+                write_log("AUTO_CLEANUP", "SYSTEM", f"Maintenance done. Kept data after {cutoff_str}")
+        
+        st.session_state.cleanup_checked = True
+
+    except Exception as e:
+        logging.error(f"Auto cleanup critical error: {e}")
+        st.session_state.cleanup_checked = True
+
+# ==========================================
+#  其他輔助函式
+# ==========================================
 def get_greeting():
     tw_tz = timezone(timedelta(hours=8))
     current_hour = datetime.now(tw_tz).hour
@@ -288,12 +380,15 @@ def post_login_init(email, name, role_override=None):
         is_mgr = email.strip().lower() in [m.lower() for m in MANAGERS]
         is_asst = email.strip().lower() in [a.lower() for a in ASSISTANTS]
         st.session_state.role = "manager" if is_mgr else "assistant" if is_asst else "sales"
-    # 【修正】預設跳轉頁面 (含 Emoji)
     st.session_state.page_radio = "💰 牌價表查詢系統" if st.session_state.role == "assistant" else "📝 OGSM日報系統"
 
 # === 主程式 ===
 def main():
     cookie_manager = stx.CookieManager()
+
+    client = get_client()
+    if client:
+        auto_cleanup_logs(client)
 
     if not st.session_state.logged_in:
         col1, col2, col3 = st.columns([1, 2, 1])
@@ -317,6 +412,8 @@ def main():
                         else:
                             success, result = login(email, pwd)
                             if success:
+                                write_session_log(email, result, action="LOGIN")
+
                                 if remember_email:
                                     try:
                                         expires = datetime.now(timezone(timedelta(hours=8))) + timedelta(days=365)
@@ -325,6 +422,11 @@ def main():
                                 else:
                                     try: cookie_manager.delete("last_email", key="del_last_email_cookie")
                                     except: pass
+                                
+                                # === FIX: 增加 1.5 秒延遲，確保手機版 Cookie 能寫入 ===
+                                time.sleep(1.5)
+                                # ================================================
+
                                 post_login_init(email, result)
                                 st.rerun()
                             else:
@@ -371,7 +473,7 @@ def main():
                         st.rerun()
         return
 
-    # === 側邊欄 (修正名稱與 Emoji) ===
+    # === 側邊欄 ===
     with st.sidebar:
         greeting = get_greeting()
         st.write(f"👤 **{st.session_state.real_name}**")
@@ -382,7 +484,6 @@ def main():
             st.markdown("---")
             with st.expander("👑 管理員切換身份"):
                 try:
-                    client = get_client()
                     if client:
                         sh = client.open(PRICE_DB_NAME)
                         ws_users = sh.worksheet("Users")
@@ -397,21 +498,19 @@ def main():
 
         st.markdown("---")
         
-        # 【修正 1】名稱更換並保留 Emoji，調整排序
         pages = ["📝 OGSM日報系統", "💰 牌價表查詢系統", "📊 日報總覽", "🔑 修改密碼", "👋 登出系統"]
         sel = st.radio("功能", pages, key="page_radio", label_visibility="collapsed")
 
     if sel == "👋 登出系統":
         write_log("登出系統", st.session_state.user_email)
+        write_session_log(st.session_state.user_email, st.session_state.real_name, action="LOGOUT")
         st.session_state.logged_in = False
         st.rerun()
 
-    client = get_client()
     if not client:
         st.error("無法連線資料庫，請稍後再試")
         return
 
-    # 【修正 1】路由名稱對應
     if sel == "📝 OGSM日報系統": 
         daily_report.show(client, REPORT_DB_NAME, st.session_state.user_email, st.session_state.real_name)
     elif sel == "💰 牌價表查詢系統": 
