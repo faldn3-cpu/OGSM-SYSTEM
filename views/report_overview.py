@@ -30,11 +30,10 @@ OPT_DIRECT = "(2) 🔵 直賣全員"
 OPT_DIST = "(3) 🟠 經銷全員"
 SPECIAL_OPTS = [OPT_ALL, OPT_DIRECT, OPT_DIST]
 
-# === 【新增】資料庫連線快取 ===
-@st.cache_resource(ttl=600)  # 快取 10 分鐘
+# === 資料庫連線 (移除快取以確保穩定性) ===
 def get_spreadsheet_with_retry(client, db_name, max_retries=3):
     """
-    使用重試機制開啟 Google Sheets (解決快速切換時的連線問題)
+    使用重試機制開啟 Google Sheets
     """
     for attempt in range(max_retries):
         try:
@@ -64,17 +63,15 @@ def get_spreadsheet_with_retry(client, db_name, max_retries=3):
                 continue
             else:
                 raise
-    
     return None
 
-# === 【新增】工作表列表快取 ===
-@st.cache_data(ttl=300)  # 快取 5 分鐘
-def get_worksheets_cached(_spreadsheet):
+# === 取得工作表列表 (移除快取以避免物件序列化錯誤) ===
+def get_worksheets_retry(spreadsheet):
     """
-    快取工作表列表 (減少 API 呼叫)
+    取得工作表列表
     """
     try:
-        worksheets = _spreadsheet.worksheets()
+        worksheets = spreadsheet.worksheets()
         return {ws.title: ws for ws in worksheets}
     except Exception as e:
         logging.error(f"Failed to get worksheets: {e}")
@@ -160,8 +157,10 @@ def load_data_from_sheet(ws, start_date, end_date):
                     wait_time = rate_limiter.handle_error(attempt + 1)
                     continue
                 else:
+                    logging.error(f"API quota exceeded after {max_retries} retries")
                     raise
             else:
+                logging.error(f"API error: {e}")
                 raise
         except Exception as e:
             logging.error(f"Failed to load data from sheet: {e}")
@@ -177,30 +176,6 @@ def get_all_sales_names(ws_map):
             sales_names.append(title)
     return sales_names
 
-def get_smart_date_range(option):
-    """
-    根據選項計算日期區間
-    結束日期規則：今天+1，若遇週末則順延至下週一
-    """
-    today = date.today()
-    
-    # 計算結束日期
-    end_date = today + timedelta(days=1)
-    while end_date.weekday() >= 5:  # 5=週六, 6=週日
-        end_date += timedelta(days=1)
-    
-    # 計算起始日期
-    if option == "1週":
-        start_date = today - timedelta(weeks=1)
-    elif option == "2週":
-        start_date = today - timedelta(weeks=2)
-    elif option == "1個月":
-        start_date = today - timedelta(days=30)
-    else:
-        start_date = today - timedelta(weeks=1)
-        
-    return start_date, end_date
-
 def show(client, db_name, user_email, real_name, is_manager):
     st.title("📊 日報總覽與匯出")
 
@@ -213,37 +188,47 @@ def show(client, db_name, user_email, real_name, is_manager):
                 return
     except SpreadsheetNotFound:
         st.error(f"❌ 找不到資料庫: {db_name}")
+        st.info("💡 請確認 Google Sheet 名稱是否正確，並已共用給 Service Account")
         return
     except Exception as e:
-        st.error(f"❌ 資料庫連線失敗")
+        # 【修正】顯示詳細錯誤訊息以便除錯
+        st.error(f"❌ 資料庫連線失敗: {e}")
+        st.info("💡 如果是 API Error 403，代表沒有權限。")
         return
 
-    # === 1. 日期選擇器 (修正為固定區間) ===
+    # === 1. 日期選擇器 ===
     col1, col2 = st.columns([2, 1])
     with col1:
-        range_option = st.radio(
-            "📅 選擇查詢區間 (限制範圍以避免超載)", 
-            ["1週", "2週", "1個月"],
-            horizontal=True,
-            index=0
-        )
+        today = date.today()
+        start_default = today - timedelta(days=today.weekday())
+        end_default = today
         
-        start_date, end_date = get_smart_date_range(range_option)
-        st.caption(f"目前顯示範圍：{start_date} ~ {end_date}")
+        date_range = st.date_input(
+            "📅 選擇查詢區間", 
+            (start_default, end_default),
+            key="overview_range_picker"
+        )
+
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start_date, end_date = date_range
+    else:
+        st.warning("請選擇完整的起始與結束日期")
+        return
 
     # === 2. 人員選擇 ===
     user_role = "manager" if is_manager else "sales"
     current_user_name = real_name
     target_users = []
 
+    # === 讀取工作表列表 ===
     try:
         with st.spinner("正在讀取工作表列表..."):
-            ws_map = get_worksheets_cached(sh)
+            ws_map = get_worksheets_retry(sh)
             if not ws_map:
-                st.error("❌ 無法讀取工作表列表")
+                st.error("❌ 無法讀取工作表列表 (可能是空的或權限不足)")
                 return
     except Exception as e:
-        st.error(f"❌ 讀取資料庫結構失敗")
+        st.error(f"❌ 讀取資料庫結構失敗: {e}")
         return
 
     if user_role == "manager":
@@ -308,7 +293,7 @@ def show(client, db_name, user_email, real_name, is_manager):
 
     if not target_users:
         if user_role == "manager":
-            st.info("請選擇人員或群組。")
+            st.info("請選擇人員或群組 (預設不顯示，請手動選擇)。")
         else:
             st.error("找不到您的資料表，請聯繫管理員。")
         return
@@ -326,6 +311,7 @@ def show(client, db_name, user_email, real_name, is_manager):
     estimated_time = len(target_users) * rate_limiter.current_delay
     st.info(f"⏱️ 正在讀取 {len(target_users)} 位業務員資料 (預計需時 {estimated_time:.1f} 秒)")
     
+    # 防止重複查詢的機制
     query_key = f"{start_date}_{end_date}_{'_'.join(sorted(target_users))}"
     
     if "last_query_key" not in st.session_state:
@@ -339,7 +325,7 @@ def show(client, db_name, user_email, real_name, is_manager):
         final_df = st.session_state.last_query_data
     else:
         # 執行新查詢
-        with st.spinner(f"彙整中... (使用智慧速率限制以避免超載)"):
+        with st.spinner(f"彙整中..."):
             progress_bar = st.progress(0)
             status_text = st.empty()
             
@@ -358,9 +344,14 @@ def show(client, db_name, user_email, real_name, is_manager):
                             df.insert(0, "業務員", user_name)
                             all_data.append(df)
                     
+                    except APIError as e:
+                        if "429" in str(e):
+                            failed_users.append(user_name)
+                            st.warning(f"⚠️ {user_name} 讀取失敗 (API 超載)，請稍後重試")
+                        else:
+                            failed_users.append(user_name)
                     except Exception as e:
                         failed_users.append(user_name)
-                        logging.error(f"Error loading {user_name}: {e}")
                 
                 progress_bar.progress((idx + 1) / len(target_users))
             
@@ -376,6 +367,7 @@ def show(client, db_name, user_email, real_name, is_manager):
 
         final_df = pd.concat(all_data, ignore_index=True)
         
+        # 儲存到快取
         st.session_state.last_query_key = query_key
         st.session_state.last_query_data = final_df
     
@@ -422,12 +414,11 @@ def show(client, db_name, user_email, real_name, is_manager):
         type="primary"
     )
     
+    # 手動清除快取按鈕
     st.markdown("---")
     if st.button("🔄 強制重新查詢 (清除快取)"):
         st.session_state.last_query_key = ""
         st.session_state.last_query_data = None
-        st.cache_data.clear()
-        st.cache_resource.clear()
-        st.success("✅ 快取已清除，重新整理頁面以載入最新資料")
+        st.success("✅ 快取已清除，正在重新載入...")
         time.sleep(1)
         st.rerun()
