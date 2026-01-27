@@ -369,7 +369,6 @@ def show(client, db_name, user_email, real_name):
     # ==========================================
     st.markdown("### ➕ 新增工作")
     
-    # ⚠️ 【關鍵修正】使用 st.form 包裹輸入欄位，直到按下「加入清單」才會觸發重跑
     with st.form("daily_report_add_form", border=True):
         c1, c2 = st.columns([1, 1])
         with c1:
@@ -393,12 +392,16 @@ def show(client, db_name, user_email, real_name):
         inp_content = sanitize_input(inp_content)
         inp_result = sanitize_input(inp_result)
         
-        if not inp_client:
+        # 【修正】放寬檢查：只有當分類「不是」其它時，才強制要求輸入客戶名稱
+        if not inp_client and inp_type != "(O) 其它":
             st.warning("⚠️ 請輸入客戶名稱")
         else:
+            # 如果是其它且沒填名稱，預設給一個 "-"
+            final_client_name = inp_client if inp_client else "-"
+            
             new_row = pd.DataFrame([{
                 "日期": inp_date,
-                "客戶名稱": inp_client,
+                "客戶名稱": final_client_name,
                 "客戶分類": inp_type if inp_type != "請選擇" else "",
                 "工作內容": inp_content,
                 "實際行程": inp_result,
@@ -523,7 +526,7 @@ def show(client, db_name, user_email, real_name):
                 current_client_name = str(row.get("客戶名稱", "")).strip()
                 default_lost_idx = 0 # 預設為 "無"
                 
-                if current_client_name: # 只有當客戶名稱不為空時才進行比對
+                if current_client_name and current_client_name != "-": # 只有當客戶名稱不為空且不是 "-" 時才進行比對
                     expected_opt = f"{real_name} - {current_client_name}"
                     if expected_opt in CRM_OPT_LOST_RECOVERY:
                         default_lost_idx = CRM_OPT_LOST_RECOVERY.index(expected_opt)
