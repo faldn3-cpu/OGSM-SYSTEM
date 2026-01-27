@@ -191,6 +191,7 @@ def show(client, db_name, user_email, real_name, is_manager):
         st.info("💡 請確認 Google Sheet 名稱是否正確，並已共用給 Service Account")
         return
     except Exception as e:
+        # 【修正】顯示詳細錯誤訊息以便除錯
         st.error(f"❌ 資料庫連線失敗: {e}")
         st.info("💡 如果是 API Error 403，代表沒有權限。")
         return
@@ -376,14 +377,10 @@ def show(client, db_name, user_email, real_name, is_manager):
     m1.metric("總填寫筆數", len(final_df))
     m2.metric("參與業務人數", len(final_df["業務員"].unique()))
     
-    # 【修正】拜訪客戶數計算：轉為字串並去除首尾空格，且過濾掉空值、佔位符 "-" 與 "nan"
-    client_series = final_df["客戶名稱"].astype(str).str.strip()
-    valid_clients = client_series[
-        (client_series != "") & 
-        (client_series != "-") & 
-        (client_series.lower() != "nan")
-    ]
-    m3.metric("拜訪客戶數", len(valid_clients.unique()))
+    # 【修正】排除 "-" 與空白的客戶名稱，只計算有效客戶
+    unique_clients = final_df["客戶名稱"].unique()
+    valid_clients = [c for c in unique_clients if str(c).strip() not in ["-", ""]]
+    m3.metric("拜訪客戶數", len(valid_clients))
 
     # 詳細表格
     st.subheader("📝 詳細列表")
