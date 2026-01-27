@@ -5,6 +5,7 @@ import gspread
 import time
 from functools import wraps
 import logging
+import streamlit.components.v1 as components  # 引入元件庫以支援 JS 複製
 
 # ==========================================
 #  設定：客戶關係表單 (CRM) 選項與參數
@@ -112,7 +113,6 @@ def get_crm_time_str():
     if display_hour == 0:
         display_hour = 12
         
-    # 格式化: 2026/1/26 下午 4:15:05 (注意月份與日期不補零)
     return f"{year}/{month}/{day} {ampm} {display_hour}:{minute:02d}:{second:02d}"
 
 def format_crm_date(date_val):
@@ -125,7 +125,6 @@ def format_crm_date(date_val):
     try:
         # 如果已經是字串，先解析
         if isinstance(date_val, str):
-            # 處理可能的時間格式
             date_val = date_val.split(" ")[0] # 取出日期部分
             d = datetime.strptime(date_val, "%Y-%m-%d")
         elif isinstance(date_val, (date, datetime)):
@@ -172,7 +171,7 @@ def get_or_create_user_sheet(client, db_name, real_name):
             logging.error(f"Failed to create worksheet: {e}")
             return None
 
-# 【強化修正】Session State 快取讀取函式 (含格式驗證)
+# 【強化修正】Session State 快取讀取函式
 def load_data_by_range_cached(ws, start_date, end_date):
     """
     快取版讀取函式
@@ -286,12 +285,11 @@ def save_to_crm_sheet(client, data_dict):
         except:
             ws = sh.sheet1
         
-        # 使用專用的格式轉換函式
-        timestamp_str = get_crm_time_str()             # 格式: 2026/1/26 下午 4:15:05
-        date_str = format_crm_date(data_dict.get("拜訪日期", "")) # 格式: 2026/1/22
+        timestamp_str = get_crm_time_str()             
+        date_str = format_crm_date(data_dict.get("拜訪日期", "")) 
         
         row_data = [
-            timestamp_str,                  # A1 時間戳記
+            timestamp_str,                  # A1
             data_dict.get("填寫人", ""),     # B1
             data_dict.get("客戶名稱", ""),   # C1
             data_dict.get("通路商", ""),     # D1
@@ -300,7 +298,7 @@ def save_to_crm_sheet(client, data_dict):
             data_dict.get("客戶性質", ""),   # G1
             data_dict.get("流失取回", ""),   # H1
             data_dict.get("產業別", ""),     # I1
-            date_str,                       # J1 拜訪日期
+            date_str,                       # J1
             data_dict.get("推廣產品", ""),   # K1
             data_dict.get("工作內容", ""),   # L1
             data_dict.get("產出日期", ""),   # M1
@@ -330,32 +328,133 @@ def sanitize_input(text, max_length=MAX_FIELD_LENGTH):
     return text
 
 # ==========================================
-#  主顯示函式
+#  JS 複製按鈕產生器 (強效版)
+# ==========================================
+def render_copy_button(text_to_copy):
+    """
+    產生一個 HTML 按鈕，點擊後會嘗試使用多種方式將文字複製到剪貼簿。
+    支援現代瀏覽器與備援機制。
+    """
+    # 處理文字中的跳脫字元，避免 JS 錯誤
+    safe_text = text_to_copy.replace("`", "\`").replace("\\", "\\\\").replace("$", "\\$")
+    
+    html_code = f"""
+    <div style="margin-top: 5px; margin-bottom: 10px;">
+        <button onclick="copyToClipboard()" style="
+            background-color: #00C851; 
+            color: white; 
+            border: none; 
+            padding: 10px 20px; 
+            text-align: center; 
+            text-decoration: none; 
+            display: inline-block; 
+            font-size: 16px; 
+            margin: 4px 2px; 
+            cursor: pointer; 
+            border-radius: 8px;
+            width: 100%;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        ">
+            📋 點擊複製 LINE 日報文字
+        </button>
+        <div id="copy_status" style="color: green; font-size: 14px; margin-top: 5px; min-height: 20px;"></div>
+    </div>
+
+    <script>
+    function copyToClipboard() {{
+        const text = `{safe_text}`;
+        const statusDiv = document.getElementById("copy_status");
+        
+        // 方法 1: 使用現代 API
+        if (navigator.clipboard && window.isSecureContext) {{
+            navigator.clipboard.writeText(text).then(function() {{
+                statusDiv.innerText = "✅ 複製成功！";
+                setTimeout(() => statusDiv.innerText = "", 3000);
+            }}, function(err) {{
+                // 若失敗，嘗試方法 2
+                fallbackCopyTextToClipboard(text);
+            }});
+        }} else {{
+            // 方法 2: 傳統 Fallback
+            fallbackCopyTextToClipboard(text);
+        }}
+    }}
+
+    function fallbackCopyTextToClipboard(text) {{
+        const statusDiv = document.getElementById("copy_status");
+        var textArea = document.createElement("textarea");
+        textArea.value = text;
+        
+        // 避免在手機上跳出鍵盤
+        textArea.style.top = "0";
+        textArea.style.left = "0";
+        textArea.style.position = "fixed";
+
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+
+        try {{
+            var successful = document.execCommand('copy');
+            var msg = successful ? '✅ 複製成功！' : '❌ 複製失敗，請手動選取複製';
+            statusDiv.innerText = msg;
+        }} catch (err) {{
+            statusDiv.innerText = '❌ 無法複製';
+        }}
+
+        document.body.removeChild(textArea);
+        setTimeout(() => statusDiv.innerText = "", 3000);
+    }}
+    </script>
+    """
+    components.html(html_code, height=100)
+
+# ==========================================
+#  主顯示函式 (模式切換架構)
 # ==========================================
 def show(client, db_name, user_email, real_name):
     st.title(f"📝 {real_name} 的業務日報")
+    
+    # 1. 狀態管理初始化
+    if "dr_mode" not in st.session_state:
+        st.session_state.dr_mode = "main" # main, add, sync
+    if "dr_sync_data" not in st.session_state:
+        st.session_state.dr_sync_data = None # 用來暫存要同步的那一筆資料
+
     ws = get_or_create_user_sheet(client, db_name, real_name)
     if not ws: return
 
     today = date.today()
     def_start, def_end = get_default_range(today)
     
-    with st.expander("📅 切換資料日期區間", expanded=False):
-        date_range = st.date_input("選擇區間", (def_start, def_end))
-    
-    if isinstance(date_range, tuple) and len(date_range) == 2: start_date, end_date = date_range
-    elif isinstance(date_range, tuple) and len(date_range) == 1: start_date = end_date = date_range[0]
-    else: start_date = end_date = today
+    # 日期選擇器 (只在主畫面顯示，避免干擾)
+    if st.session_state.dr_mode == "main":
+        with st.expander("📅 切換資料日期區間", expanded=False):
+            date_range = st.date_input("選擇區間", (def_start, def_end))
+        
+        if isinstance(date_range, tuple) and len(date_range) == 2: start_date, end_date = date_range
+        elif isinstance(date_range, tuple) and len(date_range) == 1: start_date = end_date = date_range[0]
+        else: start_date = end_date = today
+    else:
+        # 在其他模式下，使用預設或上次的日期，不顯示選擇器
+        start_date, end_date = def_start, def_end
 
+    # 讀取資料
     cached_current_df, all_df = load_data_by_range_cached(ws, start_date, end_date)
     current_df = cached_current_df.copy()
 
-    # 3. 處理「選取」欄位
+    # 確保「選取」與「同步」欄位存在 (用於 UI 操作)
     if not current_df.empty:
-        if "選取" in current_df.columns:
-            current_df = current_df.drop(columns=["選取"])
-        current_df.insert(0, "選取", False)
+        # 清理舊欄位
+        for col in ["選取", "同步"]:
+            if col in current_df.columns:
+                current_df = current_df.drop(columns=[col])
         
+        # 插入 UI 欄位
+        current_df.insert(0, "選取", False) # 用於 LINE 日報
+        current_df["同步"] = False          # 用於觸發 CRM 同步 (放在最後)
+        
+        # 預設勾選今天與明天 (LINE日報用)
         try:
             date_col = pd.to_datetime(current_df["日期"]).dt.date
             tomorrow = today + timedelta(days=1)
@@ -365,146 +464,225 @@ def show(client, db_name, user_email, real_name):
             pass
 
     # ==========================================
-    #  Part 1: 新增工作 (優化: 使用 Form 避免打字延遲)
+    #  狀態 A: 主畫面 (工作清單 & LINE 日報)
     # ==========================================
-    st.markdown("### ➕ 新增工作")
-    
-    with st.form("daily_report_add_form", border=True):
-        c1, c2 = st.columns([1, 1])
-        with c1:
-            inp_date = st.date_input("日期", today)
-        with c2:
-            inp_type = st.selectbox("客戶分類", 
-                ["請選擇", "(A) 直賣A級", "(B) 直賣B級", "(C) 直賣C級", "(D-A) 經銷A級", "(D-B) 經銷B級", "(D-C) 經銷C級", "(O) 其它"],
-                index=0
-            )
+    if st.session_state.dr_mode == "main":
         
-        inp_client = st.text_input("客戶名稱", placeholder="客戶名稱", max_chars=MAX_FIELD_LENGTH)
-        inp_content = st.text_area("工作內容", placeholder="輸入預計行程", height=100, max_chars=MAX_FIELD_LENGTH)
-        inp_result = st.text_area("實際行程", placeholder="輸入當日實際行程", height=100, max_chars=MAX_FIELD_LENGTH)
+        # --- 1. 工作清單 ---
+        col_title, col_add_btn = st.columns([3, 1])
+        with col_title:
+            st.subheader(f"📋 工作清單")
+        with col_add_btn:
+            if st.button("➕ 跳至新增工作", type="primary", use_container_width=True):
+                st.session_state.dr_mode = "add"
+                st.rerun()
 
-        # 改用 form_submit_button
-        submitted = st.form_submit_button("➕ 加入清單", type="primary", use_container_width=True)
+        # 表格顯示 (加入 Sync 觸發偵測)
+        edited_df = st.data_editor(
+            current_df,
+            num_rows="dynamic",
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "選取": st.column_config.CheckboxColumn("LINE日報", width="small", help="勾選以加入下方 LINE 日報文字"),
+                "同步": st.column_config.CheckboxColumn("同步", width="small", help="點擊此處跳轉至客戶關係表單填寫"),
+                "日期": st.column_config.DateColumn("日期", format="YYYY-MM-DD", width="small"),
+                "客戶名稱": st.column_config.TextColumn("客戶名稱", width="medium"),
+                "客戶分類": st.column_config.SelectboxColumn("客戶分類", width="small", 
+                    options=["(A) 直賣A級", "(B) 直賣B級", "(C) 直賣C級", "(D-A) 經銷A級", "(D-B) 經銷B級", "(D-C) 經銷C級", "(O) 其它"]),
+                "工作內容": st.column_config.TextColumn("工作內容", width="large"),
+                "實際行程": st.column_config.TextColumn("實際行程", width="large"),
+                "最後更新時間": st.column_config.TextColumn("更新時間", disabled=True, width="small")
+            },
+            key="data_editor_main"
+        )
 
-    if submitted:
-        # 驗證輸入
-        inp_client = sanitize_input(inp_client)
-        inp_content = sanitize_input(inp_content)
-        inp_result = sanitize_input(inp_result)
-        
-        # 【修正】放寬檢查：只有當分類「不是」其它時，才強制要求輸入客戶名稱
-        if not inp_client and inp_type != "(O) 其它":
-            st.warning("⚠️ 請輸入客戶名稱")
-        else:
-            # 如果是其它且沒填名稱，預設給一個 "-"
-            final_client_name = inp_client if inp_client else "-"
-            
-            new_row = pd.DataFrame([{
-                "日期": inp_date,
-                "客戶名稱": final_client_name,
-                "客戶分類": inp_type if inp_type != "請選擇" else "",
-                "工作內容": inp_content,
-                "實際行程": inp_result,
-                "最後更新時間": get_tw_time()
-            }])
-            
-            if "選取" in current_df.columns:
-                df_to_save = current_df.drop(columns=["選取"])
-            else:
-                df_to_save = current_df
-
-            df_to_save = pd.concat([df_to_save, new_row], ignore_index=True)
-            
-            with st.spinner("正在儲存..."):
+        # 儲存按鈕
+        if st.button("💾 儲存修改", type="secondary", use_container_width=True):
+             with st.spinner("儲存變更中..."):
+                # 儲存前移除 UI 欄位
+                df_to_save = edited_df.drop(columns=["選取", "同步"], errors='ignore')
+                
+                # 驗證輸入
+                for col in ["客戶名稱", "工作內容", "實際行程"]:
+                    if col in df_to_save.columns:
+                        df_to_save[col] = df_to_save[col].apply(lambda x: sanitize_input(x))
+                
                 success, msg = save_to_google_sheet(ws, all_df, df_to_save, start_date, end_date)
                 if success:
-                    st.success("✅ 已新增並儲存!")
+                    st.success("✅ 修改已儲存!")
                     time.sleep(1)
                     st.rerun()
-                elif msg == "速率限制":
-                    pass
                 else:
                     st.error(f"儲存失敗: {msg}")
 
-    # ==========================================
-    #  Part 2: 檢視與編輯清單
-    # ==========================================
-    st.write("")
-    st.subheader(f"📋 工作清單 ({start_date} ~ {end_date})")
-    
-    edited_df = st.data_editor(
-        current_df,
-        num_rows="dynamic",
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "選取": st.column_config.CheckboxColumn("選取", width="small", help="勾選以進行操作 (LINE日報或CRM上傳)"),
-            "日期": st.column_config.DateColumn("日期", format="YYYY-MM-DD", width="small"),
-            "客戶名稱": st.column_config.TextColumn("客戶名稱", width="medium"),
-            "客戶分類": st.column_config.SelectboxColumn("客戶分類", width="small", 
-                options=["(A) 直賣A級", "(B) 直賣B級", "(C) 直賣C級", "(D-A) 經銷A級", "(D-B) 經銷B級", "(D-C) 經銷C級", "(O) 其它"]),
-            "工作內容": st.column_config.TextColumn("工作內容", width="large"),
-            "實際行程": st.column_config.TextColumn("實際行程", width="large"),
-            "最後更新時間": st.column_config.TextColumn("更新時間", disabled=True, width="small")
-        },
-        key="data_editor_grid_v3" 
-    )
-
-    if st.button("💾 儲存修改 (表格編輯後請按我)", type="secondary", use_container_width=True):
-         with st.spinner("儲存變更中..."):
-            df_to_save = edited_df.drop(columns=["選取"]) if "選取" in edited_df.columns else edited_df
-            for col in ["客戶名稱", "工作內容", "實際行程"]:
-                if col in df_to_save.columns:
-                    df_to_save[col] = df_to_save[col].apply(lambda x: sanitize_input(x))
-            
-            success, msg = save_to_google_sheet(ws, all_df, df_to_save, start_date, end_date)
-            if success:
-                st.success("✅ 修改已儲存!")
-                time.sleep(1)
+        # --- 偵測「同步」勾選動作 ---
+        if "同步" in edited_df.columns:
+            sync_rows = edited_df[edited_df["同步"] == True]
+            if not sync_rows.empty:
+                # 抓取第一筆被勾選的資料
+                target_row = sync_rows.iloc[0]
+                st.session_state.dr_sync_data = target_row.to_dict() # 暫存資料
+                st.session_state.dr_mode = "sync" # 切換模式
                 st.rerun()
-            elif msg == "速率限制":
-                pass
-            else:
-                st.error(f"儲存失敗: {msg}")
 
-    st.markdown("---")
+        st.markdown("---")
 
-    # ==========================================
-    #  Part 2.5: 同步至客戶關係表單
-    # ==========================================
-    st.subheader("🔗 同步至客戶關係表單")
-
-    if "選取" in edited_df.columns:
-        selected_crm_rows = edited_df[edited_df["選取"] == True].copy()
-    else:
-        selected_crm_rows = pd.DataFrame()
-
-    if selected_crm_rows.empty:
-        st.info("💡 請在上方表格勾選 **一筆** 資料，即可開啟同步填寫介面。")
-    elif len(selected_crm_rows) > 1:
-        st.warning("⚠️ 為了確保資料完整性，一次請只勾選 **一筆** 資料進行詳細同步。")
-    else:
-        row = selected_crm_rows.iloc[0]
-        st.success(f"已選取：{row['日期']} - {row['客戶名稱']}")
+        # --- 2. 產生 LINE 日報文字 (含複製按鈕) ---
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.subheader("📤 產生 LINE 日報文字")
         
-        with st.expander("📝 填寫補充資料並上傳", expanded=True):
-            with st.form("crm_sync_form"):
-                st.caption("以下資料部分已自動帶入，請補齊剩餘欄位：")
+        # 準備文字
+        final_msg = ""
+        if "選取" in edited_df.columns:
+            selected_rows = edited_df[edited_df["選取"] == True].copy()
+            if not selected_rows.empty:
+                selected_rows = selected_rows.sort_values(by="日期")
+                msg_lines = [f"【{real_name} 業務匯報】"]
+                unique_dates = selected_rows["日期"].unique()
                 
+                for d in unique_dates:
+                    d_str = str(d)
+                    day_rows = selected_rows[selected_rows["日期"] == d]
+                    
+                    header_suffix = ""
+                    try:
+                        if d == today + timedelta(days=1): 
+                            header_suffix = " (明日計畫)"
+                        elif d == today: 
+                            header_suffix = " (今日實際行程)"
+                    except: pass
+
+                    msg_lines.append(f"\n📅 {d_str}{header_suffix}")
+                    msg_lines.append("--------------")
+                    
+                    for idx, row in day_rows.iterrows():
+                        c_name = str(row.get("客戶名稱", "")).strip()
+                        job = str(row.get("工作內容", "")).strip()
+                        result = str(row.get("實際行程", "")).strip()
+                        cat = str(row.get("客戶分類", "")).strip()
+                        
+                        if not c_name and not job and not result: continue
+
+                        msg_lines.append(f"🏢 {c_name} {cat}")
+                        if job: msg_lines.append(f"📋 計畫：{job}")
+                        if result: msg_lines.append(f"✅ 實績：{result}")
+                        msg_lines.append("---")
+                
+                final_msg = "\n".join(msg_lines)
+
+        # 顯示複製按鈕 (放在標題旁或下方)
+        if final_msg:
+            with c2:
+                # 呼叫 JS 複製按鈕
+                render_copy_button(final_msg)
+            
+            # 顯示預覽 (保留原本的 st.code 作為備用)
+            st.text_area("預覽內容 (若按鈕無效可手動複製)", value=final_msg, height=200)
+        else:
+            st.info("💡 請在上方表格勾選「LINE日報」欄位 (預設已勾選今天與明天)。")
+
+    # ==========================================
+    #  狀態 B: 新增工作模式 (簡潔表單)
+    # ==========================================
+    elif st.session_state.dr_mode == "add":
+        st.subheader("➕ 新增工作")
+        
+        with st.form("add_work_form", border=True):
+            c1, c2 = st.columns([1, 1])
+            with c1:
+                inp_date = st.date_input("日期", today)
+            with c2:
+                inp_type = st.selectbox("客戶分類", 
+                    ["請選擇", "(A) 直賣A級", "(B) 直賣B級", "(C) 直賣C級", "(D-A) 經銷A級", "(D-B) 經銷B級", "(D-C) 經銷C級", "(O) 其它"],
+                    index=0
+                )
+            
+            inp_client = st.text_input("客戶名稱", placeholder="客戶名稱", max_chars=MAX_FIELD_LENGTH)
+            inp_content = st.text_area("工作內容", placeholder="輸入預計行程", height=100, max_chars=MAX_FIELD_LENGTH)
+            inp_result = st.text_area("實際行程", placeholder="輸入當日實際行程", height=100, max_chars=MAX_FIELD_LENGTH)
+
+            c_sub, c_cancel = st.columns([1, 1])
+            with c_sub:
+                submitted = st.form_submit_button("加入清單", type="primary", use_container_width=True)
+            with c_cancel:
+                canceled = st.form_submit_button("取消返回", type="secondary", use_container_width=True)
+
+        if canceled:
+            st.session_state.dr_mode = "main"
+            st.rerun()
+
+        if submitted:
+            inp_client = sanitize_input(inp_client)
+            inp_content = sanitize_input(inp_content)
+            inp_result = sanitize_input(inp_result)
+            
+            # 檢查邏輯
+            if not inp_client and inp_type != "(O) 其它":
+                st.warning("⚠️ 請輸入客戶名稱")
+            else:
+                final_client_name = inp_client if inp_client else "-"
+                
+                new_row = pd.DataFrame([{
+                    "日期": inp_date,
+                    "客戶名稱": final_client_name,
+                    "客戶分類": inp_type if inp_type != "請選擇" else "",
+                    "工作內容": inp_content,
+                    "實際行程": inp_result,
+                    "最後更新時間": get_tw_time()
+                }])
+                
+                # 載入當前資料以進行合併
+                # 注意：這裡不需要重新讀取 Google Sheet，直接用快取的即可，但為了安全起見，
+                # 我們讀取快取並移除 UI 欄位
+                if current_df is not None:
+                    df_base = current_df.drop(columns=["選取", "同步"], errors='ignore')
+                else:
+                    df_base = pd.DataFrame()
+
+                df_to_save = pd.concat([df_base, new_row], ignore_index=True)
+                
+                with st.spinner("正在儲存並返回..."):
+                    success, msg = save_to_google_sheet(ws, all_df, df_to_save, start_date, end_date)
+                    if success:
+                        st.success("✅ 已新增！")
+                        st.session_state.dr_mode = "main" # 切換回主畫面 (達成清空效果)
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error(f"儲存失敗: {msg}")
+
+    # ==========================================
+    #  狀態 C: 同步模式 (填寫 CRM 表單)
+    # ==========================================
+    elif st.session_state.dr_mode == "sync":
+        row_data = st.session_state.dr_sync_data
+        if not row_data:
+            st.error("資料遺失，請返回重試")
+            if st.button("返回"):
+                st.session_state.dr_mode = "main"
+                st.rerun()
+        else:
+            st.subheader(f"🔗 同步至客戶關係表單")
+            st.info(f"正在同步：{row_data.get('日期')} - {row_data.get('客戶名稱')}")
+
+            with st.form("crm_sync_form_mode", border=True):
+                # 自動帶入欄位
                 c1, c2, c3 = st.columns(3)
                 with c1:
                     f_user = st.text_input("填寫人", value=real_name, disabled=True)
                 with c2:
-                    f_date = st.text_input("拜訪日期", value=str(row["日期"]), disabled=True)
+                    f_date = st.text_input("拜訪日期", value=str(row_data.get("日期", "")), disabled=True)
                 with c3:
-                    f_client = st.text_input("客戶名稱", value=str(row["客戶名稱"]), disabled=True)
+                    f_client = st.text_input("客戶名稱", value=str(row_data.get("客戶名稱", "")), disabled=True)
                 
                 c1, c2 = st.columns(2)
                 with c1:
-                    f_type = st.text_input("客戶性質 (自動帶入)", value=str(row["客戶分類"]), disabled=True)
+                    f_type = st.text_input("客戶性質 (自動帶入)", value=str(row_data.get("客戶分類", "")), disabled=True)
                 with c2:
-                    f_content = st.text_area("拜訪目的/案件/設備 (自動帶入)", value=str(row["工作內容"]), height=68)
-                    f_status_desc = st.text_area("案件狀況說明 (自動帶入)", value=str(row["實際行程"]), height=68, help="對應：實際行程")
+                    f_content = st.text_area("拜訪目的/案件/設備", value=str(row_data.get("工作內容", "")), height=68)
+                    f_status_desc = st.text_area("案件狀況說明", value=str(row_data.get("實際行程", "")), height=68, help="對應：實際行程")
 
                 st.markdown("---")
                 st.markdown("##### 📍 請補填以下資訊")
@@ -522,21 +700,15 @@ def show(client, db_name, user_email, real_name):
                     f_est_date = st.selectbox("案件預計產出日期", options=CRM_OPT_EST_DATE)
                     f_comp_brand = st.selectbox("競爭品牌", options=CRM_OPT_COMP_BRAND)
 
-                # === 自動判斷流失客戶索引 (新增邏輯，含防呆) ===
-                current_client_name = str(row.get("客戶名稱", "")).strip()
-                default_lost_idx = 0 # 預設為 "無"
-                
-                if current_client_name and current_client_name != "-": # 只有當客戶名稱不為空且不是 "-" 時才進行比對
+                # 自動判斷流失客戶
+                current_client_name = str(row_data.get("客戶名稱", "")).strip()
+                default_lost_idx = 0
+                if current_client_name and current_client_name != "-":
                     expected_opt = f"{real_name} - {current_client_name}"
                     if expected_opt in CRM_OPT_LOST_RECOVERY:
                         default_lost_idx = CRM_OPT_LOST_RECOVERY.index(expected_opt)
-                # ===============================================
 
-                f_lost_rec = st.selectbox(
-                    "是否為流失客戶取回 (選填)", 
-                    options=CRM_OPT_LOST_RECOVERY,
-                    index=default_lost_idx
-                )
+                f_lost_rec = st.selectbox("是否為流失客戶取回 (選填)", options=CRM_OPT_LOST_RECOVERY, index=default_lost_idx)
                 
                 c_money, c_dep = st.columns([1, 2])
                 with c_money:
@@ -544,84 +716,46 @@ def show(client, db_name, user_email, real_name):
                 with c_dep:
                     f_dependency = st.text_input("依賴事項 (選填)")
 
-                submitted = st.form_submit_button("🚀 確認上傳至客戶關係表單", type="primary", use_container_width=True)
+                # 按鈕群組
+                c_conf, c_back = st.columns([1, 1])
+                with c_conf:
+                    submitted = st.form_submit_button("🚀 確認上傳", type="primary", use_container_width=True)
+                with c_back:
+                    canceled = st.form_submit_button("取消返回", type="secondary", use_container_width=True)
+
+            if canceled:
+                st.session_state.dr_mode = "main"
+                st.session_state.dr_sync_data = None
+                st.rerun()
+
+            if submitted:
+                crm_data = {
+                    "填寫人": f_user,
+                    "客戶名稱": f_client,
+                    "通路商": f_channel,
+                    "競爭通路": f_comp_channel if f_comp_channel != "無" else "",
+                    "行動方案": f_action,
+                    "客戶性質": f_type,
+                    "流失取回": f_lost_rec if f_lost_rec != "無" else "",
+                    "產業別": f_industry,
+                    "拜訪日期": f_date,
+                    "推廣產品": ", ".join(f_products),
+                    "工作內容": f_content,
+                    "產出日期": f_est_date,
+                    "總金額": str(f_amount),
+                    "依賴事項": f_dependency,
+                    "實際行程": f_status_desc,
+                    "競爭品牌": f_comp_brand,
+                    "客戶所屬": f_owner
+                }
                 
-                if submitted:
-                    crm_data = {
-                        "填寫人": f_user,
-                        "客戶名稱": f_client,
-                        "通路商": f_channel,
-                        "競爭通路": f_comp_channel if f_comp_channel != "無" else "",
-                        "行動方案": f_action,
-                        "客戶性質": f_type,
-                        "流失取回": f_lost_rec if f_lost_rec != "無" else "",
-                        "產業別": f_industry,
-                        "拜訪日期": f_date,
-                        "推廣產品": ", ".join(f_products),
-                        "工作內容": f_content,
-                        "產出日期": f_est_date,
-                        "總金額": str(f_amount),
-                        "依賴事項": f_dependency,
-                        "實際行程": f_status_desc,
-                        "競爭品牌": f_comp_brand,
-                        "客戶所屬": f_owner
-                    }
-                    
-                    with st.spinner("正在上傳資料..."):
-                        success, msg = save_to_crm_sheet(client, crm_data)
-                        if success:
-                            st.success(f"✅ 上傳成功！已寫入「{CRM_DB_NAME}」。")
-                        else:
-                            st.error(msg)
-    
-    st.markdown("---")
-    
-    # ==========================================
-    #  Part 3: 產生 LINE 文字
-    # ==========================================
-    st.subheader("📤 產生 LINE 日報文字")
-
-    if "選取" in edited_df.columns:
-        selected_rows = edited_df[edited_df["選取"] == True].copy()
-    else:
-        selected_rows = pd.DataFrame()
-    
-    if selected_rows.empty:
-        st.info("💡 請在上方表格勾選要傳送的項目 (預設已勾選今天與明天)。")
-    else:
-        selected_rows = selected_rows.sort_values(by="日期")
-        msg_lines = [f"【{real_name} 業務匯報】"]
-        unique_dates = selected_rows["日期"].unique()
-        
-        for d in unique_dates:
-            d_str = str(d)
-            day_rows = selected_rows[selected_rows["日期"] == d]
-            
-            header_suffix = ""
-            try:
-                if d == today + timedelta(days=1): 
-                    header_suffix = " (明日計畫)"
-                elif d == today: 
-                    header_suffix = " (今日實際行程)"
-            except: 
-                pass
-
-            msg_lines.append(f"\n📅 {d_str}{header_suffix}")
-            msg_lines.append("--------------")
-            
-            for idx, row in day_rows.iterrows():
-                c_name = str(row.get("客戶名稱", "")).strip()
-                job = str(row.get("工作內容", "")).strip()
-                result = str(row.get("實際行程", "")).strip()
-                cat = str(row.get("客戶分類", "")).strip()
-                
-                if not c_name and not job and not result: continue
-
-                msg_lines.append(f"🏢 {c_name} {cat}")
-                if job: msg_lines.append(f"📋 計畫：{job}")
-                if result: msg_lines.append(f"✅ 實績：{result}")
-                msg_lines.append("---")
-            
-        final_msg = "\n".join(msg_lines)
-        st.code(final_msg, language="text")
-        st.caption("👆 點擊右上角的「複製圖示」,即可貼到 LINE 群組。")
+                with st.spinner("正在上傳資料..."):
+                    success, msg = save_to_crm_sheet(client, crm_data)
+                    if success:
+                        st.success(f"✅ 上傳成功！")
+                        st.session_state.dr_mode = "main" # 回到主畫面
+                        st.session_state.dr_sync_data = None
+                        time.sleep(1)
+                        st.rerun()
+                    else:
+                        st.error(msg)
