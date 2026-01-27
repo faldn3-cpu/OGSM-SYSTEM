@@ -112,6 +112,7 @@ def get_crm_time_str():
     if display_hour == 0:
         display_hour = 12
         
+    # 格式化: 2026/1/26 下午 4:15:05 (注意月份與日期不補零)
     return f"{year}/{month}/{day} {ampm} {display_hour}:{minute:02d}:{second:02d}"
 
 def format_crm_date(date_val):
@@ -124,6 +125,7 @@ def format_crm_date(date_val):
     try:
         # 如果已經是字串，先解析
         if isinstance(date_val, str):
+            # 處理可能的時間格式
             date_val = date_val.split(" ")[0] # 取出日期部分
             d = datetime.strptime(date_val, "%Y-%m-%d")
         elif isinstance(date_val, (date, datetime)):
@@ -170,7 +172,7 @@ def get_or_create_user_sheet(client, db_name, real_name):
             logging.error(f"Failed to create worksheet: {e}")
             return None
 
-# 【強化修正】Session State 快取讀取函式
+# 【強化修正】Session State 快取讀取函式 (含格式驗證)
 def load_data_by_range_cached(ws, start_date, end_date):
     """
     快取版讀取函式
@@ -284,11 +286,12 @@ def save_to_crm_sheet(client, data_dict):
         except:
             ws = sh.sheet1
         
-        timestamp_str = get_crm_time_str()             
-        date_str = format_crm_date(data_dict.get("拜訪日期", "")) 
+        # 使用專用的格式轉換函式
+        timestamp_str = get_crm_time_str()             # 格式: 2026/1/26 下午 4:15:05
+        date_str = format_crm_date(data_dict.get("拜訪日期", "")) # 格式: 2026/1/22
         
         row_data = [
-            timestamp_str,                  # A1
+            timestamp_str,                  # A1 時間戳記
             data_dict.get("填寫人", ""),     # B1
             data_dict.get("客戶名稱", ""),   # C1
             data_dict.get("通路商", ""),     # D1
@@ -297,7 +300,7 @@ def save_to_crm_sheet(client, data_dict):
             data_dict.get("客戶性質", ""),   # G1
             data_dict.get("流失取回", ""),   # H1
             data_dict.get("產業別", ""),     # I1
-            date_str,                       # J1
+            date_str,                       # J1 拜訪日期
             data_dict.get("推廣產品", ""),   # K1
             data_dict.get("工作內容", ""),   # L1
             data_dict.get("產出日期", ""),   # M1
@@ -510,23 +513,21 @@ def show(client, db_name, user_email, real_name):
                     f_products = st.multiselect("推廣產品 (可複選)", options=CRM_OPT_PRODUCTS)
                     f_est_date = st.selectbox("案件預計產出日期", options=CRM_OPT_EST_DATE)
                     f_comp_brand = st.selectbox("競爭品牌", options=CRM_OPT_COMP_BRAND)
-                
-                # === 自動判斷流失客戶索引 (新增邏輯) ===
-                current_client_name = str(row["客戶名稱"]).strip()
+
+                # === 自動判斷流失客戶索引 (新增邏輯，含防呆) ===
+                current_client_name = str(row.get("客戶名稱", "")).strip()
                 default_lost_idx = 0 # 預設為 "無"
                 
-                # 建立預期的選項字串，例如 "曾仁君 - 新林電機"
-                expected_opt = f"{real_name} - {current_client_name}"
-                
-                # 在清單中尋找是否存在完全符合的選項
-                if expected_opt in CRM_OPT_LOST_RECOVERY:
-                    default_lost_idx = CRM_OPT_LOST_RECOVERY.index(expected_opt)
-                # =========================================
+                if current_client_name: # 只有當客戶名稱不為空時才進行比對
+                    expected_opt = f"{real_name} - {current_client_name}"
+                    if expected_opt in CRM_OPT_LOST_RECOVERY:
+                        default_lost_idx = CRM_OPT_LOST_RECOVERY.index(expected_opt)
+                # ===============================================
 
                 f_lost_rec = st.selectbox(
                     "是否為流失客戶取回 (選填)", 
                     options=CRM_OPT_LOST_RECOVERY,
-                    index=default_lost_idx # 使用自動計算的索引
+                    index=default_lost_idx
                 )
                 
                 c_money, c_dep = st.columns([1, 2])
