@@ -16,8 +16,10 @@ CRM_DB_NAME = "客戶關係表單 (回覆)"
 CRM_OPT_CHANNEL = ["直販", "二次店", "上控廠商", "經銷商", "其他"]
 # 競爭通路
 CRM_OPT_COMP_CHANNEL = ["無", "能麒", "上菱", "強力", "日遠", "耀毅", "三菱其他通路(瀚衛、惠控、雙象)", "羅昇", "友士", "碁電", "其他"]
-# 行動方案
-CRM_OPT_ACTION = ["出差到客戶端拜訪", "電話聯繫", "報價事宜", "其他"]
+
+# 行動方案 (修正後：僅保留兩個選項)
+CRM_OPT_ACTION = ["出差到客戶端拜訪", "電話聯繫、報價事宜、其他"]
+
 # 是否為流失客戶取回
 CRM_OPT_LOST_RECOVERY = [
     "無",
@@ -113,6 +115,7 @@ def get_crm_time_str():
     if display_hour == 0:
         display_hour = 12
         
+    # 格式化: 2026/1/26 下午 4:15:05 (注意月份與日期不補零)
     return f"{year}/{month}/{day} {ampm} {display_hour}:{minute:02d}:{second:02d}"
 
 def format_crm_date(date_val):
@@ -125,6 +128,7 @@ def format_crm_date(date_val):
     try:
         # 如果已經是字串，先解析
         if isinstance(date_val, str):
+            # 處理可能的時間格式
             date_val = date_val.split(" ")[0] # 取出日期部分
             d = datetime.strptime(date_val, "%Y-%m-%d")
         elif isinstance(date_val, (date, datetime)):
