@@ -54,6 +54,14 @@ CRM_OPT_OWNER = [
 ]
 
 # ==========================================
+#  設定：台灣國定假日 (需手動維護)
+# ==========================================
+TW_HOLIDAYS = [
+    "2026-01-01", # 元旦
+    # 若有其他國定假日，請以 "YYYY-MM-DD" 格式加入此處
+]
+
+# ==========================================
 #  安全性設定：速率限制
 # ==========================================
 save_rate_limits = {}
@@ -143,7 +151,7 @@ def format_crm_date(date_val):
 def get_default_range(today):
     weekday_idx = today.weekday()
     start = today - timedelta(days=weekday_idx)
-    end = today + timedelta(days=1) # 自動顯示到明天
+    end = today + timedelta(days=6) # 自動顯示到當週日，確保看到完整一週
     return start, end
 
 def get_weekday_str(date_obj):
@@ -459,20 +467,22 @@ def show(client, db_name, user_email, real_name):
         current_df.insert(0, "選取", False) # 用於 LINE 日報
         current_df["同步"] = False          # 用於觸發 CRM 同步 (放在最後)
         
-        # 預設勾選: 今天與前一個工作日 (LINE日報用)
+        # 【修正】預設勾選：今天 + 下一個工作日 (跳過週末與假日)
         try:
+            # 輔助函式：計算下一個工作日 (跳過週末與國定假日)
+            def get_next_work_day(start_date):
+                next_d = start_date + timedelta(days=1)
+                # 0=Mon...5=Sat, 6=Sun
+                # 如果是週六(5)、週日(6) 或 在假日清單中，就繼續往後找
+                while next_d.weekday() >= 5 or str(next_d) in TW_HOLIDAYS:
+                     next_d += timedelta(days=1)
+                return next_d
+            
+            target_next_day = get_next_work_day(today)
             date_col = pd.to_datetime(current_df["日期"]).dt.date
             
-            # 計算前一個工作日 (跳過六日)
-            if today.weekday() == 0: # 週一
-                prev_work_day = today - timedelta(days=3) # 上週五
-            elif today.weekday() == 6: # 週日
-                prev_work_day = today - timedelta(days=2) # 上週五
-            else:
-                prev_work_day = today - timedelta(days=1)
-            
-            # 勾選目標：今天 與 前一個工作日
-            mask_auto_select = (date_col == today) | (date_col == prev_work_day)
+            # 勾選 1. 今天 2. 計算出的下一個工作日
+            mask_auto_select = (date_col == today) | (date_col == target_next_day)
             current_df.loc[mask_auto_select, "選取"] = True
         except:
             pass
@@ -560,13 +570,13 @@ def show(client, db_name, user_email, real_name):
                     d_str = str(d)
                     day_rows = selected_rows[selected_rows["日期"] == d]
                     
+                    # 【修正】標題邏輯：今日 vs 明日(預計)
                     header_suffix = ""
                     try:
-                        # 判斷日期是過去還是未來/今天
-                        if d < today:
-                             header_suffix = " (實際行程)"
-                        elif d >= today:
-                             header_suffix = " (預計行程)"
+                        if d == today: 
+                            header_suffix = " (今日實際行程)"
+                        elif d > today: 
+                            header_suffix = " (明日預計行程)"
                     except: pass
 
                     msg_lines.append(f"\n📅 {d_str}{header_suffix}")
@@ -596,7 +606,7 @@ def show(client, db_name, user_email, real_name):
             # 顯示預覽 (保留原本的 st.code 作為備用)
             st.text_area("預覽內容 (若按鈕無效可手動複製)", value=final_msg, height=200)
         else:
-            st.info("💡 請在上方表格勾選「LINE日報」欄位 (預設已勾選前一個工作日與今天)。")
+            st.info("💡 請在上方表格勾選「LINE日報」欄位 (預設已勾選今天與下一個工作日)。")
 
     # ==========================================
     #  狀態 B: 新增工作模式 (簡潔表單)
