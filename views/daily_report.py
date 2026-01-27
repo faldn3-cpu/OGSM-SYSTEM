@@ -459,11 +459,20 @@ def show(client, db_name, user_email, real_name):
         current_df.insert(0, "選取", False) # 用於 LINE 日報
         current_df["同步"] = False          # 用於觸發 CRM 同步 (放在最後)
         
-        # 預設勾選今天與明天 (LINE日報用)
+        # 預設勾選: 今天與前一個工作日 (LINE日報用)
         try:
             date_col = pd.to_datetime(current_df["日期"]).dt.date
-            tomorrow = today + timedelta(days=1)
-            mask_auto_select = (date_col == today) | (date_col == tomorrow)
+            
+            # 計算前一個工作日 (跳過六日)
+            if today.weekday() == 0: # 週一
+                prev_work_day = today - timedelta(days=3) # 上週五
+            elif today.weekday() == 6: # 週日
+                prev_work_day = today - timedelta(days=2) # 上週五
+            else:
+                prev_work_day = today - timedelta(days=1)
+            
+            # 勾選目標：今天 與 前一個工作日
+            mask_auto_select = (date_col == today) | (date_col == prev_work_day)
             current_df.loc[mask_auto_select, "選取"] = True
         except:
             pass
@@ -553,10 +562,11 @@ def show(client, db_name, user_email, real_name):
                     
                     header_suffix = ""
                     try:
-                        if d == today + timedelta(days=1): 
-                            header_suffix = " (明日計畫)"
-                        elif d == today: 
-                            header_suffix = " (今日實際行程)"
+                        # 判斷日期是過去還是未來/今天
+                        if d < today:
+                             header_suffix = " (實際行程)"
+                        elif d >= today:
+                             header_suffix = " (預計行程)"
                     except: pass
 
                     msg_lines.append(f"\n📅 {d_str}{header_suffix}")
@@ -586,7 +596,7 @@ def show(client, db_name, user_email, real_name):
             # 顯示預覽 (保留原本的 st.code 作為備用)
             st.text_area("預覽內容 (若按鈕無效可手動複製)", value=final_msg, height=200)
         else:
-            st.info("💡 請在上方表格勾選「LINE日報」欄位 (預設已勾選今天與明天)。")
+            st.info("💡 請在上方表格勾選「LINE日報」欄位 (預設已勾選前一個工作日與今天)。")
 
     # ==========================================
     #  狀態 B: 新增工作模式 (簡潔表單)
