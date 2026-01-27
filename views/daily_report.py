@@ -285,11 +285,12 @@ def save_to_crm_sheet(client, data_dict):
         except:
             ws = sh.sheet1
         
-        timestamp_str = get_crm_time_str()             
-        date_str = format_crm_date(data_dict.get("拜訪日期", "")) 
+        # 使用專用的格式轉換函式
+        timestamp_str = get_crm_time_str()             # 格式: 2026/1/26 下午 4:15:05
+        date_str = format_crm_date(data_dict.get("拜訪日期", "")) # 格式: 2026/1/22
         
         row_data = [
-            timestamp_str,                  # A1
+            timestamp_str,                  # A1 時間戳記
             data_dict.get("填寫人", ""),     # B1
             data_dict.get("客戶名稱", ""),   # C1
             data_dict.get("通路商", ""),     # D1
@@ -298,7 +299,7 @@ def save_to_crm_sheet(client, data_dict):
             data_dict.get("客戶性質", ""),   # G1
             data_dict.get("流失取回", ""),   # H1
             data_dict.get("產業別", ""),     # I1
-            date_str,                       # J1
+            date_str,                       # J1 拜訪日期
             data_dict.get("推廣產品", ""),   # K1
             data_dict.get("工作內容", ""),   # L1
             data_dict.get("產出日期", ""),   # M1
