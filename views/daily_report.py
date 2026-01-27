@@ -604,7 +604,7 @@ def show(client, db_name, user_email, real_name):
                 render_copy_button(final_msg)
             
             # 【調整】高度放大 2 倍 (200 -> 400)
-            st.text_area("預覽內容 (若按鈕無效可手動複製)", value=final_msg, height=400)
+            st.text_area("預覽內容 (若按鈕無效可手動複製)", value=final_msg, height=600)
         else:
             st.info("💡 請在上方表格勾選「LINE日報」欄位 (預設已勾選今天與下一個工作日)。")
 
