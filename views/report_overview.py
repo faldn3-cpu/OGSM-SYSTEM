@@ -420,7 +420,8 @@ def show(client, db_name, user_email, real_name, is_manager):
     
     # 手動清除快取按鈕
     st.markdown("---")
-    if st.button("🔄 強制重新查詢 (清除快取)"):
+    # 【變更】按鈕文字修改為 "重新載入頁面"
+    if st.button("🔄 重新載入頁面"):
         st.session_state.last_query_key = ""
         st.session_state.last_query_data = None
         st.success("✅ 快取已清除，正在重新載入...")
