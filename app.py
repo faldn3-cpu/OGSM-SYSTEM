@@ -486,7 +486,6 @@ def main():
         if current_email == "welsong@seec.com.tw":
             st.markdown("---")
             with st.expander("👑 管理員切換身份"):
-                # 【優化】使用快取函式讀取使用者列表，消除延遲
                 all_records = get_users_list_cached()
                 if all_records:
                     user_map = {f"{u.get('name')} ({u.get('email')})": u for u in all_records}
@@ -500,6 +499,18 @@ def main():
         
         pages = ["📝 OGSM日報系統", "💰 牌價表查詢系統", "📊 日報總覽", "🔑 修改密碼", "👋 登出系統"]
         sel = st.radio("功能", pages, key="page_radio", label_visibility="collapsed")
+        
+        # 【新增】自動抓取檔案時間作為版本號
+        st.markdown("---")
+        try:
+            # 取得 app.py 的最後修改時間
+            file_timestamp = os.path.getmtime(__file__)
+            # 轉換為台灣時間 (UTC+8)
+            tw_time = datetime.fromtimestamp(file_timestamp, timezone(timedelta(hours=8)))
+            last_updated_str = tw_time.strftime('%Y-%m-%d %H:%M')
+            st.caption(f"系統更新: {last_updated_str}")
+        except:
+            st.caption("Ver: Latest")
 
     if sel == "👋 登出系統":
         write_log("登出系統", st.session_state.user_email)
