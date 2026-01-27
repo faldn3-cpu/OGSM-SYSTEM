@@ -365,11 +365,12 @@ def show(client, db_name, user_email, real_name):
             pass
 
     # ==========================================
-    #  Part 1: 新增工作
+    #  Part 1: 新增工作 (優化: 使用 Form 避免打字延遲)
     # ==========================================
     st.markdown("### ➕ 新增工作")
     
-    with st.container(border=True):
+    # ⚠️ 【關鍵修正】使用 st.form 包裹輸入欄位，直到按下「加入清單」才會觸發重跑
+    with st.form("daily_report_add_form", border=True):
         c1, c2 = st.columns([1, 1])
         with c1:
             inp_date = st.date_input("日期", today)
@@ -383,40 +384,44 @@ def show(client, db_name, user_email, real_name):
         inp_content = st.text_area("工作內容", placeholder="輸入預計行程", height=100, max_chars=MAX_FIELD_LENGTH)
         inp_result = st.text_area("實際行程", placeholder="輸入當日實際行程", height=100, max_chars=MAX_FIELD_LENGTH)
 
-        if st.button("➕ 加入清單", type="primary", use_container_width=True):
-            inp_client = sanitize_input(inp_client)
-            inp_content = sanitize_input(inp_content)
-            inp_result = sanitize_input(inp_result)
-            
-            if not inp_client:
-                st.warning("⚠️ 請輸入客戶名稱")
-            else:
-                new_row = pd.DataFrame([{
-                    "日期": inp_date,
-                    "客戶名稱": inp_client,
-                    "客戶分類": inp_type if inp_type != "請選擇" else "",
-                    "工作內容": inp_content,
-                    "實際行程": inp_result,
-                    "最後更新時間": get_tw_time()
-                }])
-                
-                if "選取" in current_df.columns:
-                    df_to_save = current_df.drop(columns=["選取"])
-                else:
-                    df_to_save = current_df
+        # 改用 form_submit_button
+        submitted = st.form_submit_button("➕ 加入清單", type="primary", use_container_width=True)
 
-                df_to_save = pd.concat([df_to_save, new_row], ignore_index=True)
-                
-                with st.spinner("正在儲存..."):
-                    success, msg = save_to_google_sheet(ws, all_df, df_to_save, start_date, end_date)
-                    if success:
-                        st.success("✅ 已新增並儲存!")
-                        time.sleep(1)
-                        st.rerun()
-                    elif msg == "速率限制":
-                        pass
-                    else:
-                        st.error(f"儲存失敗: {msg}")
+    if submitted:
+        # 驗證輸入
+        inp_client = sanitize_input(inp_client)
+        inp_content = sanitize_input(inp_content)
+        inp_result = sanitize_input(inp_result)
+        
+        if not inp_client:
+            st.warning("⚠️ 請輸入客戶名稱")
+        else:
+            new_row = pd.DataFrame([{
+                "日期": inp_date,
+                "客戶名稱": inp_client,
+                "客戶分類": inp_type if inp_type != "請選擇" else "",
+                "工作內容": inp_content,
+                "實際行程": inp_result,
+                "最後更新時間": get_tw_time()
+            }])
+            
+            if "選取" in current_df.columns:
+                df_to_save = current_df.drop(columns=["選取"])
+            else:
+                df_to_save = current_df
+
+            df_to_save = pd.concat([df_to_save, new_row], ignore_index=True)
+            
+            with st.spinner("正在儲存..."):
+                success, msg = save_to_google_sheet(ws, all_df, df_to_save, start_date, end_date)
+                if success:
+                    st.success("✅ 已新增並儲存!")
+                    time.sleep(1)
+                    st.rerun()
+                elif msg == "速率限制":
+                    pass
+                else:
+                    st.error(f"儲存失敗: {msg}")
 
     # ==========================================
     #  Part 2: 檢視與編輯清單
