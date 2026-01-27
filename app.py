@@ -198,7 +198,6 @@ def get_tw_time():
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 def write_log(action, user_email, note=""):
-    """寫入系統操作紀錄"""
     client = get_client()
     if not client: return
     try:
@@ -211,7 +210,6 @@ def write_log(action, user_email, note=""):
     except Exception: pass
 
 def write_session_log(email, name, action="LOGIN"):
-    """寫入登入/登出紀錄到 Sessions"""
     client = get_client()
     if not client: return
     try:
@@ -230,10 +228,6 @@ def write_session_log(email, name, action="LOGIN"):
 #  🧹 智慧型每月自動清理功能
 # ==========================================
 def auto_cleanup_logs(client):
-    """
-    自動清理 Logs, Sessions, SearchLogs 三個工作表。
-    保留最近 62 天資料。
-    """
     if st.session_state.cleanup_checked:
         return
 
@@ -299,7 +293,7 @@ def auto_cleanup_logs(client):
         st.session_state.cleanup_checked = True
 
 # ==========================================
-#  其他輔助函式
+#  其他輔助函式 (含快取優化)
 # ==========================================
 def get_greeting():
     tw_tz = timezone(timedelta(hours=8))
@@ -316,6 +310,17 @@ def check_password(plain_text, hashed_text):
 
 def hash_password(plain_text):
     return bcrypt.hashpw(plain_text.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+@st.cache_data(ttl=600)
+def get_users_list_cached():
+    """快取讀取 Users 表單，避免每次重新渲染時都讀取"""
+    client = get_client()
+    if not client: return []
+    try:
+        sh = client.open(PRICE_DB_NAME)
+        ws = sh.worksheet("Users")
+        return ws.get_all_records()
+    except: return []
 
 # === 郵件 & 登入功能 ===
 def send_otp_email(to_email, otp_code):
@@ -423,9 +428,7 @@ def main():
                                     try: cookie_manager.delete("last_email", key="del_last_email_cookie")
                                     except: pass
                                 
-                                # === FIX: 增加 1.5 秒延遲，確保手機版 Cookie 能寫入 ===
                                 time.sleep(1.5)
-                                # ================================================
 
                                 post_login_init(email, result)
                                 st.rerun()
@@ -483,18 +486,15 @@ def main():
         if current_email == "welsong@seec.com.tw":
             st.markdown("---")
             with st.expander("👑 管理員切換身份"):
-                try:
-                    if client:
-                        sh = client.open(PRICE_DB_NAME)
-                        ws_users = sh.worksheet("Users")
-                        all_records = ws_users.get_all_records()
-                        user_map = {f"{u.get('name')} ({u.get('email')})": u for u in all_records}
-                        target = st.selectbox("選擇模擬對象", list(user_map.keys()))
-                        if st.button("確認切換", type="primary"):
-                             t_user = user_map[target]
-                             post_login_init(t_user.get('email'), t_user.get('name'))
-                             st.rerun()
-                except: pass
+                # 【優化】使用快取函式讀取使用者列表，消除延遲
+                all_records = get_users_list_cached()
+                if all_records:
+                    user_map = {f"{u.get('name')} ({u.get('email')})": u for u in all_records}
+                    target = st.selectbox("選擇模擬對象", list(user_map.keys()))
+                    if st.button("確認切換", type="primary"):
+                            t_user = user_map[target]
+                            post_login_init(t_user.get('email'), t_user.get('name'))
+                            st.rerun()
 
         st.markdown("---")
         
