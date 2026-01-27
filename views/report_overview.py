@@ -191,7 +191,6 @@ def show(client, db_name, user_email, real_name, is_manager):
         st.info("💡 請確認 Google Sheet 名稱是否正確，並已共用給 Service Account")
         return
     except Exception as e:
-        # 【修正】顯示詳細錯誤訊息以便除錯
         st.error(f"❌ 資料庫連線失敗: {e}")
         st.info("💡 如果是 API Error 403，代表沒有權限。")
         return
@@ -209,12 +208,7 @@ def show(client, db_name, user_email, real_name, is_manager):
             key="overview_range_picker"
         )
 
-    if isinstance(date_range, tuple) and len(date_range) == 2:
-        start_date, end_date = date_range
-    else:
-        st.warning("請選擇完整的起始與結束日期")
-        return
-
+    # 【調整順序】先處理人員選擇，確保 UI 被渲染，避免 key 被清除
     # === 2. 人員選擇 ===
     user_role = "manager" if is_manager else "sales"
     current_user_name = real_name
@@ -296,6 +290,18 @@ def show(client, db_name, user_email, real_name, is_manager):
             st.info("請選擇人員或群組 (預設不顯示，請手動選擇)。")
         else:
             st.error("找不到您的資料表，請聯繫管理員。")
+        # 這裡不 return，繼續往下走，讓日期驗證邏輯也能顯示警告
+        # 但如果是空的，下方的資料查詢自然不會跑出結果
+
+    # 【調整順序】最後再驗證日期，若不完整則暫停，不影響上方 UI
+    if isinstance(date_range, tuple) and len(date_range) == 2:
+        start_date, end_date = date_range
+    else:
+        st.warning("請選擇完整的起始與結束日期")
+        return
+        
+    # 若人員為空，在這裡阻擋
+    if not target_users:
         return
 
     st.markdown("---")
@@ -420,7 +426,6 @@ def show(client, db_name, user_email, real_name, is_manager):
     
     # 手動清除快取按鈕
     st.markdown("---")
-    # 【變更】按鈕文字修改為 "重新載入頁面"
     if st.button("🔄 重新載入頁面"):
         st.session_state.last_query_key = ""
         st.session_state.last_query_data = None
