@@ -13,6 +13,7 @@ from datetime import datetime, timezone, timedelta
 import extra_streamlit_components as stx 
 import logging
 from functools import wraps
+import traceback # 新增：用於顯示完整錯誤追蹤
 
 # 匯入頁面模組
 from views import price_query, daily_report, report_overview
@@ -179,7 +180,7 @@ def can_send_email(email):
     return True, "OK"
 
 # === 工具函式 ===
-@st.cache_resource
+# 【修正】移除 @st.cache_resource 以確保每次重整都能重新抓取錯誤訊息
 def get_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     error_log = []
@@ -197,16 +198,24 @@ def get_client():
     # 方式 2: 檢查 Streamlit Secrets
     try:
         if "gcp_service_account" in st.secrets:
-            creds_dict = dict(st.secrets["gcp_service_account"])
-            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-            return gspread.authorize(creds)
+            # 嘗試讀取並轉換 secrets
+            try:
+                creds_dict = dict(st.secrets["gcp_service_account"])
+                # 簡單驗證關鍵欄位
+                if "private_key" not in creds_dict:
+                    error_log.append("Secrets found but 'private_key' is missing.")
+                else:
+                    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+                    return gspread.authorize(creds)
+            except Exception as inner_e:
+                error_log.append(f"Secrets parsing error: {str(inner_e)}")
         else:
             error_log.append("Secrets 'gcp_service_account' key not found.")
     except Exception as e:
-        error_log.append(f"Secrets error: {str(e)}")
+        error_log.append(f"General Secrets error: {str(e)}\n{traceback.format_exc()}")
 
     # 如果都失敗，記錄錯誤訊息
-    st.session_state.connection_error_msg = " | ".join(error_log)
+    st.session_state.connection_error_msg = " || ".join(error_log)
     return None
 
 def get_tw_time():
@@ -356,7 +365,7 @@ def send_otp_email(to_email, otp_code):
 
 def login(email, password):
     client = get_client()
-    if not client: return False, "連線失敗"
+    if not client: return False, "連線失敗: 無法建立 Google 連線"
     try:
         sh = client.open(PRICE_DB_NAME)
         ws = sh.worksheet("Users")
@@ -366,7 +375,9 @@ def login(email, password):
                 if check_password(password, str(user.get('password'))):
                     return True, str(user.get('name')) or email
         return False, "帳號或密碼錯誤"
-    except Exception as e: return False, str(e)
+    except Exception as e:
+        # 回傳具體錯誤供除錯
+        return False, f"登入驗證失敗: {str(e)}"
 
 def change_password(email, new_password):
     client = get_client()
@@ -407,7 +418,10 @@ def post_login_init(email, name, role_override=None):
 def main():
     cookie_manager = stx.CookieManager()
 
+    # 嘗試取得連線 (每次重跑都會執行，因為移除了快取)
     client = get_client()
+    
+    # 若連線成功，執行自動清理
     if client:
         auto_cleanup_logs(client)
 
@@ -493,7 +507,7 @@ def main():
         
         # 【新增】詳細連線錯誤顯示區塊
         if not client:
-            st.error(f"❌ 系統無法連線資料庫，可能原因streamlit系統伺服器異常(非使用者問題)，請晚點再試。")
+            st.error(f"❌ 無法連線資料庫，請檢查以下錯誤詳情。")
             if st.session_state.connection_error_msg:
                  with st.expander("🔍 點擊查看技術錯誤詳情 (供管理員除錯)", expanded=True):
                     st.code(st.session_state.connection_error_msg, language="text")
@@ -543,7 +557,7 @@ def main():
         st.rerun()
 
     if not client:
-        st.error("系統無法連線資料庫，可能原因streamlit系統伺服器異常(非使用者問題)，請晚點再試。")
+        st.error("無法連線資料庫，請稍後再試")
         return
 
     if sel == "📝 OGSM日報系統": 
