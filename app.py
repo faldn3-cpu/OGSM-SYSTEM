@@ -13,7 +13,7 @@ from datetime import datetime, timezone, timedelta
 import extra_streamlit_components as stx 
 import logging
 from functools import wraps
-import traceback # 新增：用於顯示完整錯誤追蹤
+import traceback 
 
 # 匯入頁面模組
 from views import price_query, daily_report, report_overview
@@ -143,7 +143,7 @@ if 'reset_stage' not in st.session_state: st.session_state.reset_stage = 0
 if 'reset_otp' not in st.session_state: st.session_state.reset_otp = ""
 if 'reset_target_email' not in st.session_state: st.session_state.reset_target_email = ""
 if 'cleanup_checked' not in st.session_state: st.session_state.cleanup_checked = False
-# 新增：連線錯誤訊息暫存
+# 連線錯誤訊息暫存
 if 'connection_error_msg' not in st.session_state: st.session_state.connection_error_msg = ""
 
 # ==========================================
@@ -180,7 +180,15 @@ def can_send_email(email):
     return True, "OK"
 
 # === 工具函式 ===
-# 【修正】移除 @st.cache_resource 以確保每次重整都能重新抓取錯誤訊息
+def get_tw_time():
+    tw_tz = timezone(timedelta(hours=8))
+    return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
+
+# 【新增】系統啟動時間 (使用 cache_resource，只有在系統重啟時才會重新執行)
+@st.cache_resource
+def get_system_boot_time():
+    return get_tw_time()
+
 def get_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     error_log = []
@@ -198,10 +206,8 @@ def get_client():
     # 方式 2: 檢查 Streamlit Secrets
     try:
         if "gcp_service_account" in st.secrets:
-            # 嘗試讀取並轉換 secrets
             try:
                 creds_dict = dict(st.secrets["gcp_service_account"])
-                # 簡單驗證關鍵欄位
                 if "private_key" not in creds_dict:
                     error_log.append("Secrets found but 'private_key' is missing.")
                 else:
@@ -217,10 +223,6 @@ def get_client():
     # 如果都失敗，記錄錯誤訊息
     st.session_state.connection_error_msg = " || ".join(error_log)
     return None
-
-def get_tw_time():
-    tw_tz = timezone(timedelta(hours=8))
-    return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 def write_log(action, user_email, note=""):
     client = get_client()
@@ -363,6 +365,7 @@ def send_otp_email(to_email, otp_code):
         return True, "已發送"
     except Exception as e: return False, str(e)
 
+# 【強化】登入函式：加入失敗紀錄
 def login(email, password):
     client = get_client()
     if not client: return False, "連線失敗: 無法建立 Google 連線"
@@ -370,13 +373,24 @@ def login(email, password):
         sh = client.open(PRICE_DB_NAME)
         ws = sh.worksheet("Users")
         users = ws.get_all_records()
+        
+        email_found = False
         for user in users:
             if str(user.get('email')).strip() == email.strip():
+                email_found = True
                 if check_password(password, str(user.get('password'))):
                     return True, str(user.get('name')) or email
+                else:
+                    # 密碼錯誤 - 寫入 Log
+                    write_log("LOGIN_FAILED", email, "密碼錯誤")
+                    return False, "帳號或密碼錯誤"
+        
+        if not email_found:
+            # 帳號不存在 - 寫入 Log (可選，防範 User Enum 攻擊)
+            write_log("LOGIN_FAILED", email, "帳號不存在")
+            
         return False, "帳號或密碼錯誤"
     except Exception as e:
-        # 回傳具體錯誤供除錯
         return False, f"登入驗證失敗: {str(e)}"
 
 def change_password(email, new_password):
@@ -417,11 +431,9 @@ def post_login_init(email, name, role_override=None):
 # === 主程式 ===
 def main():
     cookie_manager = stx.CookieManager()
-
-    # 嘗試取得連線 (每次重跑都會執行，因為移除了快取)
-    client = get_client()
     
-    # 若連線成功，執行自動清理
+    # 嘗試連線
+    client = get_client()
     if client:
         auto_cleanup_logs(client)
 
@@ -505,12 +517,17 @@ def main():
                         st.session_state.reset_stage = 0
                         st.rerun()
         
-        # 【新增】詳細連線錯誤顯示區塊
         if not client:
             st.error(f"❌ 無法連線資料庫，請檢查以下錯誤詳情。")
             if st.session_state.connection_error_msg:
                  with st.expander("🔍 點擊查看技術錯誤詳情 (供管理員除錯)", expanded=True):
                     st.code(st.session_state.connection_error_msg, language="text")
+        
+        # 顯示系統時間資訊，協助判斷是否重啟
+        st.markdown("---")
+        c_time = get_tw_time()
+        b_time = get_system_boot_time()
+        st.caption(f"🕒 系統目前時間: {c_time} | 🚀 系統啟動時間: {b_time}")
         
         return
 
@@ -538,17 +555,19 @@ def main():
         pages = ["📝 OGSM日報系統", "💰 牌價表查詢系統", "📊 日報總覽", "🔑 修改密碼", "👋 登出系統"]
         sel = st.radio("功能", pages, key="page_radio", label_visibility="collapsed")
         
-        # 【新增】自動抓取檔案時間作為版本號
         st.markdown("---")
+        # 【修改】整合檔案更新與系統啟動時間
         try:
-            # 取得 app.py 的最後修改時間
             file_timestamp = os.path.getmtime(__file__)
-            # 轉換為台灣時間 (UTC+8)
             tw_time = datetime.fromtimestamp(file_timestamp, timezone(timedelta(hours=8)))
             last_updated_str = tw_time.strftime('%Y-%m-%d %H:%M')
-            st.caption(f"系統更新: {last_updated_str}")
+            st.caption(f"檔案版本: {last_updated_str}")
         except:
             st.caption("Ver: Latest")
+            
+        # 顯示系統啟動時間 (這個時間只有在 Secrets 更新重啟容器時才會變動)
+        boot_time = get_system_boot_time()
+        st.caption(f"系統啟動: {boot_time}")
 
     if sel == "👋 登出系統":
         write_log("登出系統", st.session_state.user_email)
