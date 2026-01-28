@@ -142,6 +142,8 @@ if 'reset_stage' not in st.session_state: st.session_state.reset_stage = 0
 if 'reset_otp' not in st.session_state: st.session_state.reset_otp = ""
 if 'reset_target_email' not in st.session_state: st.session_state.reset_target_email = ""
 if 'cleanup_checked' not in st.session_state: st.session_state.cleanup_checked = False
+# 新增：連線錯誤訊息暫存
+if 'connection_error_msg' not in st.session_state: st.session_state.connection_error_msg = ""
 
 # ==========================================
 #  🔒 安全性功能：速率限制器
@@ -180,17 +182,31 @@ def can_send_email(email):
 @st.cache_resource
 def get_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+    error_log = []
+
+    # 方式 1: 檢查本地檔案
     if os.path.exists('service_account.json'):
         try:
             creds = ServiceAccountCredentials.from_json_keyfile_name('service_account.json', scope)
             return gspread.authorize(creds)
-        except Exception: return None
+        except Exception as e:
+            error_log.append(f"Local file error: {str(e)}")
+    else:
+        error_log.append("Local 'service_account.json' not found.")
+
+    # 方式 2: 檢查 Streamlit Secrets
     try:
         if "gcp_service_account" in st.secrets:
             creds_dict = dict(st.secrets["gcp_service_account"])
             creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
             return gspread.authorize(creds)
-    except Exception: pass
+        else:
+            error_log.append("Secrets 'gcp_service_account' key not found.")
+    except Exception as e:
+        error_log.append(f"Secrets error: {str(e)}")
+
+    # 如果都失敗，記錄錯誤訊息
+    st.session_state.connection_error_msg = " | ".join(error_log)
     return None
 
 def get_tw_time():
@@ -474,6 +490,14 @@ def main():
                     if st.button("← 返回", use_container_width=True):
                         st.session_state.reset_stage = 0
                         st.rerun()
+        
+        # 【新增】詳細連線錯誤顯示區塊
+        if not client:
+            st.error(f"❌ 無法連線資料庫，請稍後再試。")
+            if st.session_state.connection_error_msg:
+                 with st.expander("🔍 點擊查看技術錯誤詳情 (供管理員除錯)", expanded=True):
+                    st.code(st.session_state.connection_error_msg, language="text")
+        
         return
 
     # === 側邊欄 ===
