@@ -1,27 +1,18 @@
-name: Keep Streamlit Alive
+name: Wake Up Streamlit
 
 on:
   schedule:
-    # 設定每天早上 8:00 (UTC 0:00) 執行一次
-    - cron: "0 0 * * *"
-  workflow_dispatch: # 允許您在 GitHub 介面上手動按按鈕測試
-
-permissions:
-  contents: write  # <--- 這行就是關鍵，給予寫入權限，不用密碼
+    # 說明：UTC 23:00 對應台灣時間早上 07:00
+    # 設定為：UTC 23:00 到 11:00 (台灣 07:00 ~ 19:00)，每小時的 30 分執行一次
+    # 這樣只在台灣的「上班時間」喚醒，節省資源
+    - cron: "30 23-11 * * *"
+  workflow_dispatch: # 允許手動執行測試
 
 jobs:
-  keep-alive:
+  wake-up:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v3
-
-      - name: Empty Commit
-        run: |
-          # 這裡設定機器人的假身份，不需要真實帳號
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Action"
-          # 提交一個空更新
-          git commit --allow-empty -m "💪 Keep Alive: Prevent Streamlit Sleep"
-          # 推送回 GitHub
-          git push
+      - name: Send Wake Up Signal
+        # 使用 curl 發送請求，並帶上參數 ?wake_up=true
+        # 這會觸發 app.py 中的 Early Exit 機制，不消耗 API 配額
+        run: curl https://seecfa-ogsm-system.streamlit.app/?wake_up=true
