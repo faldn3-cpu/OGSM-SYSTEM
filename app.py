@@ -38,6 +38,16 @@ st.set_page_config(
 )
 
 # ==========================================
+#  🛡️ 新增功能：GitHub Action 喚醒偵測 (Early Exit)
+#  說明：當偵測到網址參數 ?wake_up=true 時，僅啟動伺服器，
+#       不執行後續資料庫連線，以節省 API 配額並避免錯誤。
+# ==========================================
+if "wake_up" in st.query_params:
+    st.title("🤖 System Woken Up Successfully")
+    st.write("System is live. No database connections were made.")
+    st.stop()  # <--- 強制停止執行後續程式碼
+
+# ==========================================
 #  強制 HTTPS 檢查
 # ==========================================
 if 'https_checked' not in st.session_state:
