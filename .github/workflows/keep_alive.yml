@@ -2,8 +2,10 @@ name: Wake Up
 
 on:
   schedule:
-    # 台灣時間 07:00 ~ 19:00，每 20 分鐘喚醒一次
-    - cron: '*/20 23-11 * * *'
+    # 修正重點：將 '23-11' 改為 '0-11,23'
+    # 代表：UTC 0點~11點 (台灣 8:00~19:00) 加上 UTC 23點 (台灣 7:00)
+    # 這樣就符合「由小到大」的語法，且涵蓋上班時間
+    - cron: '*/20 0-11,23 * * *'
   workflow_dispatch:
 
 jobs:
@@ -11,6 +13,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Ping with Timeout
-        # 1. 加入雙引號 "..." 避免格式錯誤
-        # 2. --max-time 45：設定最長等待 45 秒 (配合我們 Python 的 30 秒)
+        # 這裡維持原樣，這是正確的
         run: curl --max-time 45 -L -A "Mozilla/5.0" "https://seecfa-ogsm-system.streamlit.app/?wake_up=true"
