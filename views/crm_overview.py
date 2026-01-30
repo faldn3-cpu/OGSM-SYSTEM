@@ -60,6 +60,16 @@ def load_crm_data_cached(_client, db_name, sheet_name):
             
         df = pd.DataFrame(data)
         
+        # 【修正】處理欄位名稱不一致的問題
+        # 自動搜尋包含 "客戶所屬" 的欄位，並將其標準化命名為 "客戶所屬"
+        rename_map = {}
+        for col in df.columns:
+            if "客戶所屬" in str(col):
+                rename_map[col] = "客戶所屬"
+        
+        if rename_map:
+            df.rename(columns=rename_map, inplace=True)
+        
         # 欄位名稱對照 (確保與 daily_report.py 寫入的一致)
         # 預期欄位: 時間戳記, 填寫人, 客戶名稱, 通路商, 競爭通路, 行動方案, 
         #           客戶性質, 流失取回, 產業別, 拜訪日期, 推廣產品, 工作內容, 
@@ -101,6 +111,14 @@ def show(client, user_email, real_name, is_manager):
             st.rerun()
         return
 
+    # 確保關鍵欄位存在 (防止其他欄位也缺漏)
+    required_cols = ["填寫人", "客戶所屬", "產業別", "通路商", "推廣產品", "客戶名稱", "總金額"]
+    missing_cols = [c for c in required_cols if c not in df_original.columns]
+    if missing_cols:
+        st.error(f"❌ 資料表缺少關鍵欄位，請檢查 Google Sheet 標題: {', '.join(missing_cols)}")
+        st.dataframe(df_original.head(2)) # 顯示前兩筆讓使用者除錯
+        return
+
     # 2. 側邊/上方篩選器
     with st.container(border=True):
         col1, col2 = st.columns([1, 2])
@@ -121,12 +139,13 @@ def show(client, user_email, real_name, is_manager):
         # --- 人員篩選 (權限控管) ---
         with col2:
             target_users = []
+            
+            # 取得所有相關人員清單 (排除空值)
             all_sales_in_data = sorted(list(set(
-                df_original["填寫人"].unique().tolist() + 
-                df_original["客戶所屬"].unique().tolist()
+                df_original["填寫人"].dropna().unique().tolist() + 
+                df_original["客戶所屬"].dropna().unique().tolist()
             )))
-            # 移除空值
-            all_sales_in_data = [x for x in all_sales_in_data if x and str(x).strip() != ""]
+            all_sales_in_data = [x for x in all_sales_in_data if str(x).strip() != ""]
 
             if is_manager:
                 # 管理員模式：可選多人
@@ -190,7 +209,6 @@ def show(client, user_email, real_name, is_manager):
                 sel_industry = st.multiselect("產業別", options=all_industries)
             with c2:
                 # 產品可能包含多選字串 (e.g. "士林品, 三菱品")，這裡做簡單篩選
-                # 若要精確拆分稍複雜，這裡先用包含篩選
                 sel_product_kw = st.text_input("產品關鍵字 (例如: 士林)", help="篩選推廣產品欄位")
             with c3:
                 all_channels = sorted(list(set([x for x in df_filtered["通路商"].unique() if x])))
@@ -231,22 +249,29 @@ def show(client, user_email, real_name, is_manager):
         if "產業別" in df_filtered.columns:
             industry_counts = df_filtered["產業別"].value_counts().reset_index()
             industry_counts.columns = ["產業別", "數量"]
-            fig_ind = px.pie(industry_counts, values="數量", names="產業別", title="各產業案件分佈", hole=0.4)
-            st.plotly_chart(fig_ind, use_container_width=True)
+            if not industry_counts.empty:
+                fig_ind = px.pie(industry_counts, values="數量", names="產業別", title="各產業案件分佈", hole=0.4)
+                st.plotly_chart(fig_ind, use_container_width=True)
+            else:
+                st.caption("無產業資料可顯示")
             
     with chart2:
-        # 產品推廣 (長條圖) - 需要拆解多選欄位
+        # 產品推廣 (長條圖)
         if "推廣產品" in df_filtered.columns:
             # 將 "士林品, 三菱品" 拆開成多列
             products_series = df_filtered["推廣產品"].astype(str).str.split(r'[、,]\s*').explode()
             # 移除空字串
             products_series = products_series[products_series != ""]
-            prod_counts = products_series.value_counts().reset_index()
-            prod_counts.columns = ["推廣產品", "次數"]
             
-            fig_prod = px.bar(prod_counts, x="次數", y="推廣產品", orientation='h', title="產品推廣熱度", text="次數")
-            fig_prod.update_layout(yaxis={'categoryorder':'total ascending'})
-            st.plotly_chart(fig_prod, use_container_width=True)
+            if not products_series.empty:
+                prod_counts = products_series.value_counts().reset_index()
+                prod_counts.columns = ["推廣產品", "次數"]
+                
+                fig_prod = px.bar(prod_counts, x="次數", y="推廣產品", orientation='h', title="產品推廣熱度", text="次數")
+                fig_prod.update_layout(yaxis={'categoryorder':'total ascending'})
+                st.plotly_chart(fig_prod, use_container_width=True)
+            else:
+                st.caption("無產品資料可顯示")
 
     # 6. 詳細資料表
     st.subheader("📝 詳細列表")
