@@ -47,6 +47,7 @@ def parse_crm_date(date_val):
 def load_crm_data_cached(_client, db_name, sheet_name):
     """
     讀取整張 CRM 表單並轉為 DataFrame
+    修正：改用 get_all_values 避免標題重複報錯
     """
     try:
         sh = _client.open(db_name)
@@ -54,12 +55,17 @@ def load_crm_data_cached(_client, db_name, sheet_name):
             ws = sh.worksheet(sheet_name)
         except:
             ws = sh.sheet1
-            
-        data = ws.get_all_records()
-        if not data:
+        
+        # 【修正】改用 get_all_values() 避免 duplicate header 錯誤
+        rows = ws.get_all_values()
+        if not rows or len(rows) < 2:
             return pd.DataFrame()
             
-        df = pd.DataFrame(data)
+        # 第一列為標題，其餘為資料
+        headers = rows[0]
+        data = rows[1:]
+        
+        df = pd.DataFrame(data, columns=headers)
         
         # 【修正】智慧欄位對應
         # 定義：關鍵字 -> 程式內部標準名稱
@@ -116,7 +122,7 @@ def show(client, user_email, real_name, is_manager):
     df_original = load_crm_data_cached(client, CRM_DB_NAME, CRM_SHEET_NAME)
     
     if df_original.empty:
-        st.info("尚無 CRM 資料或無法讀取。")
+        st.info("尚無 CRM 資料或無法讀取 (可能是空的)。")
         if st.button("🔄 重試"):
             st.cache_data.clear()
             st.rerun()
@@ -156,12 +162,14 @@ def show(client, user_email, real_name, is_manager):
             target_users = []
             
             # 取得所有相關人員清單 (排除空值)
-            # 這裡需要處理可能沒有 "填寫人" 或 "客戶所屬" 的情況 (雖然上面檢查過了)
             cols_to_check = [c for c in ["填寫人", "客戶所屬"] if c in df_original.columns]
             
             all_sales_in_data = set()
             for c in cols_to_check:
-                all_sales_in_data.update(df_original[c].dropna().unique().tolist())
+                # 這裡要小心 convert to string 避免 mix types error
+                unique_vals = df_original[c].dropna().unique()
+                for v in unique_vals:
+                    all_sales_in_data.add(str(v))
                 
             all_sales_in_data = sorted([x for x in list(all_sales_in_data) if str(x).strip() != ""])
 
@@ -215,9 +223,9 @@ def show(client, user_email, real_name, is_manager):
     # 構建人員遮罩
     mask_user = pd.Series([False] * len(df_filtered), index=df_filtered.index)
     if "填寫人" in df_filtered.columns:
-        mask_user |= df_filtered["填寫人"].isin(target_users)
+        mask_user |= df_filtered["填寫人"].astype(str).isin(target_users)
     if "客戶所屬" in df_filtered.columns:
-        mask_user |= df_filtered["客戶所屬"].isin(target_users)
+        mask_user |= df_filtered["客戶所屬"].astype(str).isin(target_users)
         
     df_filtered = df_filtered[mask_user]
     
