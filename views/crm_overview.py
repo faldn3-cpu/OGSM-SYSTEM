@@ -10,7 +10,7 @@ import logging
 CRM_DB_NAME = "客戶關係表單 (回覆)"
 CRM_SHEET_NAME = "表單回應 1"
 
-# === 設定: 人員群組 (建議與 report_overview 保持一致或統一管理) ===
+# === 設定: 人員群組 ===
 DIRECT_SALES_NAMES = [
     "曾仁君", "溫達仁", "楊家豪", "莊富丞", "謝瑞騏", "何宛茹", "張書偉"
 ]
@@ -28,7 +28,6 @@ def clean_currency(val):
     """將金額字串轉換為 float"""
     if not val: return 0.0
     if isinstance(val, (int, float)): return float(val)
-    # 移除千分位與空白
     val_str = str(val).replace(",", "").strip()
     try:
         return float(val_str)
@@ -47,7 +46,6 @@ def parse_crm_date(date_val):
 def load_crm_data_cached(_client, db_name, sheet_name):
     """
     讀取整張 CRM 表單並轉為 DataFrame
-    修正：改用 get_all_values 避免標題重複報錯
     """
     try:
         sh = _client.open(db_name)
@@ -56,57 +54,49 @@ def load_crm_data_cached(_client, db_name, sheet_name):
         except:
             ws = sh.sheet1
         
-        # 【修正】改用 get_all_values() 避免 duplicate header 錯誤
+        # 改用 get_all_values 以避免 header 重複錯誤
         rows = ws.get_all_values()
         if not rows or len(rows) < 2:
             return pd.DataFrame()
             
-        # 第一列為標題，其餘為資料
         headers = rows[0]
         data = rows[1:]
         
         df = pd.DataFrame(data, columns=headers)
         
-        # 【修正】智慧欄位對應
-        # 定義：關鍵字 -> 程式內部標準名稱
+        # 智慧欄位對應
         column_keywords = {
             "客戶名稱": "客戶名稱",
             "推廣產品": "推廣產品",
             "總金額": "總金額",
             "客戶所屬": "客戶所屬",
-            "案件狀況說明": "實際行程",  # 對應表單的 "案件狀況說明..."
-            "拜訪目的": "工作內容",      # 對應表單的 "拜訪目的..."
+            "案件狀況說明": "實際行程",
+            "拜訪目的": "工作內容",
             "產出日期": "產出日期"
         }
         
         rename_map = {}
         for col in df.columns:
             str_col = str(col)
-            # 針對每個欄位，檢查是否包含上述關鍵字
             for kw, target in column_keywords.items():
                 if kw in str_col:
                     rename_map[col] = target
                     break 
         
-        # 執行重新命名
         if rename_map:
             df.rename(columns=rename_map, inplace=True)
         
-        # 1. 處理日期欄位
         if "拜訪日期" in df.columns:
             df["拜訪日期_dt"] = pd.to_datetime(df["拜訪日期"], errors='coerce').dt.date
         else:
             df["拜訪日期_dt"] = None
             
-        # 2. 處理金額欄位
         if "總金額" in df.columns:
             df["總金額_數值"] = df["總金額"].apply(clean_currency)
         else:
             df["總金額_數值"] = 0.0
 
-        # 3. 處理空值
         df.fillna("", inplace=True)
-        
         return df
 
     except Exception as e:
@@ -118,7 +108,7 @@ def load_crm_data_cached(_client, db_name, sheet_name):
 def show(client, user_email, real_name, is_manager):
     st.title("📊 CRM 商機總覽")
 
-    # 1. 讀取資料
+    # 1. 讀取資料 (這裡只是讀取快取，真正的篩選在後面)
     df_original = load_crm_data_cached(client, CRM_DB_NAME, CRM_SHEET_NAME)
     
     if df_original.empty:
@@ -128,16 +118,11 @@ def show(client, user_email, real_name, is_manager):
             st.rerun()
         return
 
-    # 確保關鍵欄位存在 (防止其他欄位也缺漏)
-    # 注意：這裡檢查的是經過 rename 後的標準名稱
     required_cols = ["填寫人", "客戶所屬", "產業別", "通路商", "推廣產品", "客戶名稱", "總金額"]
     missing_cols = [c for c in required_cols if c not in df_original.columns]
     
     if missing_cols:
         st.error(f"❌ 資料表處理後仍缺少關鍵欄位: {', '.join(missing_cols)}")
-        st.warning("請檢查 Google Sheet 標題是否包含這些關鍵字")
-        with st.expander("查看讀取到的原始欄位"):
-            st.write(df_original.columns.tolist())
         return
 
     # 2. 側邊/上方篩選器
@@ -147,7 +132,6 @@ def show(client, user_email, real_name, is_manager):
         # --- 日期篩選 ---
         with col1:
             today = date.today()
-            # 預設顯示本月
             start_default = today.replace(day=1)
             end_default = today
             
@@ -157,31 +141,56 @@ def show(client, user_email, real_name, is_manager):
                 key="crm_date_range"
             )
 
-        # --- 人員篩選 (權限控管) ---
+        # --- 人員篩選 (權限控管 + 互斥邏輯) ---
         with col2:
             target_users = []
             
-            # 取得所有相關人員清單 (排除空值)
             cols_to_check = [c for c in ["填寫人", "客戶所屬"] if c in df_original.columns]
-            
             all_sales_in_data = set()
             for c in cols_to_check:
-                # 這裡要小心 convert to string 避免 mix types error
                 unique_vals = df_original[c].dropna().unique()
                 for v in unique_vals:
                     all_sales_in_data.add(str(v))
-                
             all_sales_in_data = sorted([x for x in list(all_sales_in_data) if str(x).strip() != ""])
 
             if is_manager:
-                # 管理員模式：可選多人
+                # 初始化 Session State
+                if "crm_sales_select" not in st.session_state:
+                    st.session_state.crm_sales_select = []
+                if "crm_sales_prev" not in st.session_state:
+                    st.session_state.crm_sales_prev = st.session_state.crm_sales_select
+
                 menu_options = SPECIAL_OPTS + all_sales_in_data
-                
-                selected_opts = st.multiselect(
+
+                # 定義互斥邏輯 callback
+                def on_selection_change():
+                    current = st.session_state.crm_sales_select
+                    previous = st.session_state.crm_sales_prev
+                    
+                    added = [item for item in current if item not in previous]
+                    new_selection = current
+                    
+                    if added:
+                        new_item = added[-1]
+                        if new_item in SPECIAL_OPTS:
+                            # 如果選了群組 (如: 全員)，清除其他
+                            new_selection = [new_item]
+                        else:
+                            # 如果選了個人，清除群組選項
+                            new_selection = [item for item in current if item not in SPECIAL_OPTS]
+                    
+                    st.session_state.crm_sales_select = new_selection
+                    st.session_state.crm_sales_prev = new_selection
+
+                st.multiselect(
                     "👥 選擇業務員 (篩選 填寫人 或 客戶所屬)",
                     options=menu_options,
-                    default=OPT_ALL
+                    key="crm_sales_select",
+                    on_change=on_selection_change,
+                    placeholder="請選擇人員或群組..."  # 提示字
                 )
+                
+                selected_opts = st.session_state.crm_sales_select
                 
                 # 解析選項
                 final_target_set = set()
@@ -200,27 +209,26 @@ def show(client, user_email, real_name, is_manager):
                 target_users = list(final_target_set)
                 
             else:
-                # 業務員模式：鎖定自己
                 st.text_input("👤 查看對象", value=f"{real_name} (權限鎖定)", disabled=True)
                 target_users = [real_name]
 
-    # 3. 執行資料篩選
+    # 【重要】如果沒有選擇人員，就暫停顯示，避免載入全部或空白
+    if not target_users:
+        st.info("👆 請在上方選擇「查看對象」以開始查詢 (支援複選或群組)。")
+        return
+
     if isinstance(date_range, tuple) and len(date_range) == 2:
         start_date, end_date = date_range
     else:
         st.warning("請選擇完整的日期區間")
         return
 
+    # 3. 資料過濾邏輯
     # 步驟 A: 日期過濾
     mask_date = (df_original["拜訪日期_dt"] >= start_date) & (df_original["拜訪日期_dt"] <= end_date)
     df_filtered = df_original.loc[mask_date].copy()
 
     # 步驟 B: 人員過濾
-    if not target_users:
-        st.warning("請選擇至少一位業務員")
-        return
-
-    # 構建人員遮罩
     mask_user = pd.Series([False] * len(df_filtered), index=df_filtered.index)
     if "填寫人" in df_filtered.columns:
         mask_user |= df_filtered["填寫人"].astype(str).isin(target_users)
@@ -229,16 +237,16 @@ def show(client, user_email, real_name, is_manager):
         
     df_filtered = df_filtered[mask_user]
     
-    # 步驟 C: 進階屬性過濾 (產業 & 產品)
+    # 步驟 C: 進階屬性過濾 (修正排版問題)
     if not df_filtered.empty:
         with st.expander("🔍 進階篩選 (產業、產品、通路)", expanded=False):
-            c1, c2, c3 = st.columns(3)
+            # 【修正】使用 vertical_alignment="bottom" 讓輸入框底部對齊
+            c1, c2, c3 = st.columns(3, vertical_alignment="bottom")
             with c1:
                 all_industries = sorted(list(set([x for x in df_filtered["產業別"].unique() if x])))
                 sel_industry = st.multiselect("產業別", options=all_industries)
             with c2:
-                # 產品可能包含多選字串
-                sel_product_kw = st.text_input("產品關鍵字 (例如: 士林)", help="篩選推廣產品欄位")
+                sel_product_kw = st.text_input("產品關鍵字", placeholder="例如: 士林", help="篩選推廣產品欄位")
             with c3:
                 all_channels = sorted(list(set([x for x in df_filtered["通路商"].unique() if x])))
                 sel_channel = st.multiselect("通路商", options=all_channels)
@@ -250,13 +258,12 @@ def show(client, user_email, real_name, is_manager):
             if sel_channel:
                 df_filtered = df_filtered[df_filtered["通路商"].isin(sel_channel)]
 
-    # 4. 顯示統計指標 (KPI Cards)
+    # 4. 顯示統計指標
     st.markdown("---")
     if df_filtered.empty:
         st.info("🔍 此區間與條件下無資料。")
         return
 
-    # 計算指標
     total_amount = df_filtered["總金額_數值"].sum()
     total_count = len(df_filtered)
     unique_clients = df_filtered["客戶名稱"].nunique()
@@ -268,13 +275,11 @@ def show(client, user_email, real_name, is_manager):
     k3.metric("🏢 涉及客戶數", unique_clients)
     k4.metric("📈 平均案件金額 (萬)", f"{avg_amount:,.1f}")
 
-    # 5. 圖表分析 (使用 Plotly)
+    # 5. 圖表分析
     st.subheader("📊 視覺化分析")
-    
     chart1, chart2 = st.columns(2)
     
     with chart1:
-        # 產業佔比 (圓餅圖)
         if "產業別" in df_filtered.columns:
             industry_counts = df_filtered["產業別"].value_counts().reset_index()
             industry_counts.columns = ["產業別", "數量"]
@@ -285,17 +290,13 @@ def show(client, user_email, real_name, is_manager):
                 st.caption("無產業資料可顯示")
             
     with chart2:
-        # 產品推廣 (長條圖)
         if "推廣產品" in df_filtered.columns:
-            # 將 "士林品, 三菱品" 拆開成多列
             products_series = df_filtered["推廣產品"].astype(str).str.split(r'[、,]\s*').explode()
-            # 移除空字串
             products_series = products_series[products_series != ""]
             
             if not products_series.empty:
                 prod_counts = products_series.value_counts().reset_index()
                 prod_counts.columns = ["推廣產品", "次數"]
-                
                 fig_prod = px.bar(prod_counts, x="次數", y="推廣產品", orientation='h', title="產品推廣熱度", text="次數")
                 fig_prod.update_layout(yaxis={'categoryorder':'total ascending'})
                 st.plotly_chart(fig_prod, use_container_width=True)
@@ -305,21 +306,16 @@ def show(client, user_email, real_name, is_manager):
     # 6. 詳細資料表
     st.subheader("📝 詳細列表")
     
-    # 選擇要顯示的欄位 (這裡使用內部標準名稱)
     display_cols = [
         "拜訪日期", "填寫人", "客戶所屬", "客戶名稱", "產業別", 
         "推廣產品", "總金額", "行動方案", "實際行程", "產出日期"
     ]
-    # 確保欄位存在
     final_cols = [c for c in display_cols if c in df_filtered.columns]
     
-    # 重新命名欄位以便閱讀 (例如將 "實際行程" 顯示為 "目前狀況")
     ui_rename_map = {"實際行程": "目前狀況"}
     display_df = df_filtered.rename(columns=ui_rename_map)
-    # 更新要顯示的 columns list
     final_cols_ui = [ui_rename_map.get(c, c) for c in final_cols]
     
-    # 排序
     display_df = display_df.sort_values(by="拜訪日期", ascending=False)
 
     st.dataframe(
@@ -341,7 +337,6 @@ def show(client, user_email, real_name, is_manager):
         mime="text/csv"
     )
 
-    # 清除快取按鈕
     if st.button("🔄 重新載入最新資料"):
         st.cache_data.clear()
         st.rerun()
