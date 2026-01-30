@@ -65,6 +65,7 @@ def load_crm_data_cached(_client, db_name, sheet_name):
         df = pd.DataFrame(data, columns=headers)
         
         # 智慧欄位對應
+        # 【修改 1】新增 "依賴事項" 到對應表，確保它被正確讀取
         column_keywords = {
             "客戶名稱": "客戶名稱",
             "推廣產品": "推廣產品",
@@ -72,7 +73,8 @@ def load_crm_data_cached(_client, db_name, sheet_name):
             "客戶所屬": "客戶所屬",
             "案件狀況說明": "實際行程",
             "拜訪目的": "工作內容",
-            "產出日期": "產出日期"
+            "產出日期": "產出日期",
+            "依賴事項": "依賴事項"  # 新增
         }
         
         rename_map = {}
@@ -108,7 +110,7 @@ def load_crm_data_cached(_client, db_name, sheet_name):
 def show(client, user_email, real_name, is_manager):
     st.title("📊 CRM 商機總覽")
 
-    # 1. 讀取資料 (這裡只是讀取快取，真正的篩選在後面)
+    # 1. 讀取資料
     df_original = load_crm_data_cached(client, CRM_DB_NAME, CRM_SHEET_NAME)
     
     if df_original.empty:
@@ -154,7 +156,6 @@ def show(client, user_email, real_name, is_manager):
             all_sales_in_data = sorted([x for x in list(all_sales_in_data) if str(x).strip() != ""])
 
             if is_manager:
-                # 初始化 Session State
                 if "crm_sales_select" not in st.session_state:
                     st.session_state.crm_sales_select = []
                 if "crm_sales_prev" not in st.session_state:
@@ -162,7 +163,6 @@ def show(client, user_email, real_name, is_manager):
 
                 menu_options = SPECIAL_OPTS + all_sales_in_data
 
-                # 定義互斥邏輯 callback
                 def on_selection_change():
                     current = st.session_state.crm_sales_select
                     previous = st.session_state.crm_sales_prev
@@ -173,10 +173,8 @@ def show(client, user_email, real_name, is_manager):
                     if added:
                         new_item = added[-1]
                         if new_item in SPECIAL_OPTS:
-                            # 如果選了群組 (如: 全員)，清除其他
                             new_selection = [new_item]
                         else:
-                            # 如果選了個人，清除群組選項
                             new_selection = [item for item in current if item not in SPECIAL_OPTS]
                     
                     st.session_state.crm_sales_select = new_selection
@@ -187,12 +185,11 @@ def show(client, user_email, real_name, is_manager):
                     options=menu_options,
                     key="crm_sales_select",
                     on_change=on_selection_change,
-                    placeholder="請選擇人員或群組..."  # 提示字
+                    placeholder="請選擇人員或群組..."
                 )
                 
                 selected_opts = st.session_state.crm_sales_select
                 
-                # 解析選項
                 final_target_set = set()
                 if OPT_ALL in selected_opts:
                     final_target_set.update(all_sales_in_data)
@@ -212,7 +209,6 @@ def show(client, user_email, real_name, is_manager):
                 st.text_input("👤 查看對象", value=f"{real_name} (權限鎖定)", disabled=True)
                 target_users = [real_name]
 
-    # 【重要】如果沒有選擇人員，就暫停顯示，避免載入全部或空白
     if not target_users:
         st.info("👆 請在上方選擇「查看對象」以開始查詢 (支援複選或群組)。")
         return
@@ -237,26 +233,54 @@ def show(client, user_email, real_name, is_manager):
         
     df_filtered = df_filtered[mask_user]
     
-    # 步驟 C: 進階屬性過濾 (修正排版問題)
+    # 步驟 C: 進階屬性過濾 (修正版：加入客戶名稱與模糊搜尋)
     if not df_filtered.empty:
-        with st.expander("🔍 進階篩選 (產業、產品、通路)", expanded=False):
-            # 【修正】使用 vertical_alignment="bottom" 讓輸入框底部對齊
-            c1, c2, c3 = st.columns(3, vertical_alignment="bottom")
-            with c1:
+        with st.expander("🔍 進階篩選 (客戶、產業、關鍵字)", expanded=False):
+            # 【修改 2】第一列：產業與通路 (類別型)
+            r1_c1, r1_c2 = st.columns(2)
+            with r1_c1:
                 all_industries = sorted(list(set([x for x in df_filtered["產業別"].unique() if x])))
                 sel_industry = st.multiselect("產業別", options=all_industries)
-            with c2:
-                sel_product_kw = st.text_input("產品關鍵字", placeholder="例如: 士林", help="篩選推廣產品欄位")
-            with c3:
+            with r1_c2:
                 all_channels = sorted(list(set([x for x in df_filtered["通路商"].unique() if x])))
                 sel_channel = st.multiselect("通路商", options=all_channels)
-            
+
+            # 【修改 3】第二列：客戶名稱、產品、模糊搜尋 (文字/搜尋型)
+            # 使用 vertical_alignment="bottom" 確保輸入框對齊
+            r2_c1, r2_c2, r2_c3 = st.columns(3, vertical_alignment="bottom")
+            with r2_c1:
+                # 動態取得當前範圍內的客戶名稱
+                all_clients = sorted(list(set([x for x in df_filtered["客戶名稱"].unique() if x])))
+                sel_client_name = st.multiselect("客戶名稱", options=all_clients, placeholder="選擇特定客戶...")
+            with r2_c2:
+                sel_product_kw = st.text_input("產品關鍵字", placeholder="例如: 士林", help="篩選「推廣產品」欄位")
+            with r2_c3:
+                sel_fuzzy_kw = st.text_input("模糊關鍵字搜尋", placeholder="搜尋客戶/目的/狀況/依賴...", help="同時搜尋：客戶名稱、工作內容、依賴事項、實際行程")
+
+            # 執行篩選
             if sel_industry:
                 df_filtered = df_filtered[df_filtered["產業別"].isin(sel_industry)]
-            if sel_product_kw:
-                df_filtered = df_filtered[df_filtered["推廣產品"].astype(str).str.contains(sel_product_kw, case=False)]
             if sel_channel:
                 df_filtered = df_filtered[df_filtered["通路商"].isin(sel_channel)]
+            if sel_client_name:
+                df_filtered = df_filtered[df_filtered["客戶名稱"].isin(sel_client_name)]
+            if sel_product_kw:
+                df_filtered = df_filtered[df_filtered["推廣產品"].astype(str).str.contains(sel_product_kw, case=False)]
+            
+            # 【修改 4】模糊搜尋邏輯
+            if sel_fuzzy_kw:
+                # 定義要搜尋的欄位 (確保欄位存在)
+                search_cols = ["客戶名稱", "工作內容", "依賴事項", "實際行程"]
+                valid_cols = [c for c in search_cols if c in df_filtered.columns]
+                
+                if valid_cols:
+                    # 建立一個全 False 的 mask
+                    mask_fuzzy = pd.Series([False] * len(df_filtered), index=df_filtered.index)
+                    for col in valid_cols:
+                        # 使用 OR (|) 邏輯串接各欄位的搜尋結果
+                        mask_fuzzy |= df_filtered[col].astype(str).str.contains(sel_fuzzy_kw, case=False)
+                    
+                    df_filtered = df_filtered[mask_fuzzy]
 
     # 4. 顯示統計指標
     st.markdown("---")
@@ -308,7 +332,7 @@ def show(client, user_email, real_name, is_manager):
     
     display_cols = [
         "拜訪日期", "填寫人", "客戶所屬", "客戶名稱", "產業別", 
-        "推廣產品", "總金額", "行動方案", "實際行程", "產出日期"
+        "推廣產品", "總金額", "行動方案", "實際行程", "依賴事項", "產出日期"
     ]
     final_cols = [c for c in display_cols if c in df_filtered.columns]
     
