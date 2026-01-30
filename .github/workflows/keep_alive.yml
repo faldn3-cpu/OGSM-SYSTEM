@@ -3,7 +3,7 @@ name: Wake Up Streamlit
 on:
   schedule:
     # 台灣時間 07:00 ~ 19:00，每 20 分鐘喚醒一次
-    - cron: "*/20 23-11 * * *"
+    - cron: '*/20 23-11 * * *'
   workflow_dispatch:
 
 jobs:
@@ -11,5 +11,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Wake up
-        # 這裡改成單行指令，避免縮排錯誤
-        run: curl -L -A "Mozilla/5.0" https://seecfa-ogsm-system.streamlit.app/?wake_up=true
+        # 關鍵修改：網址前後加上了 "雙引號"，防止 ? 被誤判為指令錯誤
+        run: curl -L -A "Mozilla/5.0" "https://seecfa-ogsm-system.streamlit.app/?wake_up=true"
