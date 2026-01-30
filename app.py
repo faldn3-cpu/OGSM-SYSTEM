@@ -569,7 +569,7 @@ def main():
         st.markdown("---")
         
         # 【修改】加入 "📊 CRM 商機總覽"
-        pages = ["📝 OGSM日報系統", "💰 牌價表查詢系統", "📊 日報總覽", "📊 CRM 商機總覽", "🔑 修改密碼", "👋 登出系統"]
+        pages = ["📝 OGSM日報系統", "💰 牌價表查詢系統", "📊 OGSM日報總覽", "📊 CRM 商機總覽", "🔑 修改密碼", "👋 登出系統"]
         sel = st.radio("功能", pages, key="page_radio", label_visibility="collapsed")
         
         st.markdown("---")
@@ -598,7 +598,7 @@ def main():
         daily_report.show(client, REPORT_DB_NAME, st.session_state.user_email, st.session_state.real_name)
     elif sel == "💰 牌價表查詢系統": 
         price_query.show(client, PRICE_DB_NAME, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
-    elif sel == "📊 日報總覽": 
+    elif sel == "📊 OGSM日報總覽": 
         report_overview.show(client, REPORT_DB_NAME, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
     # 【修改】加入 CRM 總覽頁面邏輯
     elif sel == "📊 CRM 商機總覽":
