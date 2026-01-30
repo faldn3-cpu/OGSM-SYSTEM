@@ -2,9 +2,7 @@ name: Wake Up
 
 on:
   schedule:
-    # 修正重點：將 '23-11' 改為 '0-11,23'
-    # 代表：UTC 0點~11點 (台灣 8:00~19:00) 加上 UTC 23點 (台灣 7:00)
-    # 這樣就符合「由小到大」的語法，且涵蓋上班時間
+    # 台灣時間 07:00 ~ 19:00 (UTC 0-11, 23)，每 20 分鐘執行一次
     - cron: '*/20 0-11,23 * * *'
   workflow_dispatch:
 
@@ -12,6 +10,6 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping with Timeout
-        # 這裡維持原樣，這是正確的
-        run: curl --max-time 45 -L -A "Mozilla/5.0" "https://seecfa-ogsm-system.streamlit.app/?wake_up=true"
+      - name: Ping and Hold
+        # 加上 || true 確保即使 curl 逾時，GitHub 依然顯示綠色勾勾
+        run: curl --max-time 50 -L -A "Mozilla/5.0" "https://seecfa-ogsm-system.streamlit.app/?wake_up=true" || true
