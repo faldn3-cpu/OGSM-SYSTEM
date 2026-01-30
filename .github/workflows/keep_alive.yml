@@ -2,16 +2,14 @@ name: Wake Up Streamlit
 
 on:
   schedule:
-    # 台灣時間 07:00 ~ 19:00 (UTC 23:00 ~ 11:00)
-    # 每 20 分鐘喚醒一次，確保不睡著
+    # 台灣時間 07:00 ~ 19:00，每 20 分鐘喚醒一次
     - cron: "*/20 23-11 * * *"
-  workflow_dispatch: # 允許手動按按鈕測試
+  workflow_dispatch:
 
 jobs:
   wake-up:
     runs-on: ubuntu-latest
     steps:
-      - name: Send Wake Up Signal
-        run: |
-          curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" \
-          https://seecfa-ogsm-system.streamlit.app/?wake_up=true
+      - name: Wake up
+        # 這裡改成單行指令，避免縮排錯誤
+        run: curl -L -A "Mozilla/5.0" https://seecfa-ogsm-system.streamlit.app/?wake_up=true
