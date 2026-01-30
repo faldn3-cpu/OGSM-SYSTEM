@@ -1,15 +1,15 @@
-name: Wake Up Streamlit
+name: Wake Up
 
 on:
   schedule:
-    # 台灣時間 07:00 ~ 19:00，每 20 分鐘喚醒一次
-    - cron: '*/20 23-11 * * *'
+    # 改為每 15 分鐘一次，確保不會在賴床空檔被抓到
+    - cron: '*/15 23-11 * * *'
   workflow_dispatch:
 
 jobs:
-  wake-up:
+  ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Wake up
-        # 關鍵修改：網址前後加上了 "雙引號"，防止 ? 被誤判為指令錯誤
-        run: curl -L -A "Mozilla/5.0" "https://seecfa-ogsm-system.streamlit.app/?wake_up=true"
+      - name: Ping Streamlit
+        # 這是最簡單的寫法，加上引號確保網址正確
+        run: curl -L "https://seecfa-ogsm-system.streamlit.app/?wake_up=true"
