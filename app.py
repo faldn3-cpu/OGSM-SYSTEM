@@ -15,8 +15,8 @@ import logging
 from functools import wraps
 import traceback 
 
-# 匯入頁面模組
-from views import price_query, daily_report, report_overview
+# 匯入頁面模組 (已新增 crm_overview)
+from views import price_query, daily_report, report_overview, crm_overview
 
 # ==========================================
 #  安全性設定
@@ -568,11 +568,11 @@ def main():
 
         st.markdown("---")
         
-        pages = ["📝 OGSM日報系統", "💰 牌價表查詢系統", "📊 日報總覽", "🔑 修改密碼", "👋 登出系統"]
+        # 【修改】加入 "📊 CRM 商機總覽"
+        pages = ["📝 OGSM日報系統", "💰 牌價表查詢系統", "📊 日報總覽", "📊 CRM 商機總覽", "🔑 修改密碼", "👋 登出系統"]
         sel = st.radio("功能", pages, key="page_radio", label_visibility="collapsed")
         
         st.markdown("---")
-        # 【修改】整合檔案更新與系統啟動時間
         try:
             file_timestamp = os.path.getmtime(__file__)
             tw_time = datetime.fromtimestamp(file_timestamp, timezone(timedelta(hours=8)))
@@ -581,7 +581,6 @@ def main():
         except:
             st.caption("Ver: Latest")
             
-        # 顯示系統啟動時間 (這個時間只有在 Secrets 更新重啟容器時才會變動)
         boot_time = get_system_boot_time()
         st.caption(f"系統啟動: {boot_time}")
 
@@ -601,6 +600,9 @@ def main():
         price_query.show(client, PRICE_DB_NAME, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
     elif sel == "📊 日報總覽": 
         report_overview.show(client, REPORT_DB_NAME, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
+    # 【修改】加入 CRM 總覽頁面邏輯
+    elif sel == "📊 CRM 商機總覽":
+        crm_overview.show(client, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
     elif sel == "🔑 修改密碼":
         st.subheader("修改密碼")
         p1 = st.text_input("新密碼 (至少 6 位)", type="password", max_chars=50)
@@ -618,6 +620,4 @@ def main():
                 else: st.error("修改失敗，請聯繫管理員")
 
 if __name__ == "__main__":
-
     main()
-
