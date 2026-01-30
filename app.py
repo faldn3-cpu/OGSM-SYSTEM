@@ -38,15 +38,20 @@ st.set_page_config(
 )
 
 # ==========================================
-#  🛡️ 新增功能：GitHub Action 喚醒偵測 (Early Exit)
-#  說明：當偵測到網址參數 ?wake_up=true 時，僅啟動伺服器，
-#       不執行後續資料庫連線，以節省 API 配額並避免錯誤。
+#  🛡️ 強力喚醒模式 (Hold the Door)
+#  說明：當偵測到 ?wake_up=true 時，刻意停留 30 秒
+#       確保 Streamlit 伺服器完成完整的啟動程序，不會秒睡。
 # ==========================================
 if "wake_up" in st.query_params:
-    st.title("🤖 I am awake!")
-    st.write("System is live.")
-    # 稍微等個 3 秒，確保 Streamlit 伺服器有足夠時間註冊這次啟動
-    time.sleep(3)
+    print("⏰ Wake up signal received. Holding connection...") # 寫入後台 Log
+    st.title("🤖 System is Waking Up...")
+    st.write("Holding the door open for 30 seconds...")
+    
+    # 關鍵：強制等待 30 秒，不讓 Python 程式結束
+    # 這會讓伺服器認為這是一個「有效的長連線」
+    time.sleep(30)
+    
+    st.write("Done. System is live.")
     st.stop()
 # ==========================================
 #  強制 HTTPS 檢查
@@ -615,3 +620,4 @@ def main():
 if __name__ == "__main__":
 
     main()
+
