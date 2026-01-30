@@ -2,14 +2,15 @@ name: Wake Up
 
 on:
   schedule:
-    # 改為每 15 分鐘一次，確保不會在賴床空檔被抓到
-    - cron: '*/15 23-11 * * *'
+    # 台灣時間 07:00 ~ 19:00，每 20 分鐘喚醒一次
+    - cron: '*/20 23-11 * * *'
   workflow_dispatch:
 
 jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Streamlit
-        # 這是最簡單的寫法，加上引號確保網址正確
-        run: curl -L "https://seecfa-ogsm-system.streamlit.app/?wake_up=true"
+      - name: Ping with Timeout
+        # 1. 加入雙引號 "..." 避免格式錯誤
+        # 2. --max-time 45：設定最長等待 45 秒 (配合我們 Python 的 30 秒)
+        run: curl --max-time 45 -L -A "Mozilla/5.0" "https://seecfa-ogsm-system.streamlit.app/?wake_up=true"
