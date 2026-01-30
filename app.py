@@ -43,10 +43,11 @@ st.set_page_config(
 #       不執行後續資料庫連線，以節省 API 配額並避免錯誤。
 # ==========================================
 if "wake_up" in st.query_params:
-    st.title("🤖 System Woken Up Successfully")
-    st.write("System is live. No database connections were made.")
-    st.stop()  # <--- 強制停止執行後續程式碼
-
+    st.title("🤖 I am awake!")
+    st.write("System is live.")
+    # 稍微等個 3 秒，確保 Streamlit 伺服器有足夠時間註冊這次啟動
+    time.sleep(3)
+    st.stop()
 # ==========================================
 #  強制 HTTPS 檢查
 # ==========================================
@@ -612,4 +613,5 @@ def main():
                 else: st.error("修改失敗，請聯繫管理員")
 
 if __name__ == "__main__":
+
     main()
