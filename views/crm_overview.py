@@ -28,6 +28,7 @@ def clean_currency(val):
     """將金額字串轉換為 float"""
     if not val: return 0.0
     if isinstance(val, (int, float)): return float(val)
+    # 移除千分位與空白
     val_str = str(val).replace(",", "").strip()
     try:
         return float(val_str)
@@ -60,20 +61,30 @@ def load_crm_data_cached(_client, db_name, sheet_name):
             
         df = pd.DataFrame(data)
         
-        # 【修正】處理欄位名稱不一致的問題
-        # 自動搜尋包含 "客戶所屬" 的欄位，並將其標準化命名為 "客戶所屬"
+        # 【修正】智慧欄位對應
+        # 定義：關鍵字 -> 程式內部標準名稱
+        column_keywords = {
+            "客戶名稱": "客戶名稱",
+            "推廣產品": "推廣產品",
+            "總金額": "總金額",
+            "客戶所屬": "客戶所屬",
+            "案件狀況說明": "實際行程",  # 對應表單的 "案件狀況說明..."
+            "拜訪目的": "工作內容",      # 對應表單的 "拜訪目的..."
+            "產出日期": "產出日期"
+        }
+        
         rename_map = {}
         for col in df.columns:
-            if "客戶所屬" in str(col):
-                rename_map[col] = "客戶所屬"
+            str_col = str(col)
+            # 針對每個欄位，檢查是否包含上述關鍵字
+            for kw, target in column_keywords.items():
+                if kw in str_col:
+                    rename_map[col] = target
+                    break 
         
+        # 執行重新命名
         if rename_map:
             df.rename(columns=rename_map, inplace=True)
-        
-        # 欄位名稱對照 (確保與 daily_report.py 寫入的一致)
-        # 預期欄位: 時間戳記, 填寫人, 客戶名稱, 通路商, 競爭通路, 行動方案, 
-        #           客戶性質, 流失取回, 產業別, 拜訪日期, 推廣產品, 工作內容, 
-        #           產出日期, 總金額, 依賴事項, 實際行程, 競爭品牌, 客戶所屬
         
         # 1. 處理日期欄位
         if "拜訪日期" in df.columns:
@@ -112,11 +123,15 @@ def show(client, user_email, real_name, is_manager):
         return
 
     # 確保關鍵欄位存在 (防止其他欄位也缺漏)
+    # 注意：這裡檢查的是經過 rename 後的標準名稱
     required_cols = ["填寫人", "客戶所屬", "產業別", "通路商", "推廣產品", "客戶名稱", "總金額"]
     missing_cols = [c for c in required_cols if c not in df_original.columns]
+    
     if missing_cols:
-        st.error(f"❌ 資料表缺少關鍵欄位，請檢查 Google Sheet 標題: {', '.join(missing_cols)}")
-        st.dataframe(df_original.head(2)) # 顯示前兩筆讓使用者除錯
+        st.error(f"❌ 資料表處理後仍缺少關鍵欄位: {', '.join(missing_cols)}")
+        st.warning("請檢查 Google Sheet 標題是否包含這些關鍵字")
+        with st.expander("查看讀取到的原始欄位"):
+            st.write(df_original.columns.tolist())
         return
 
     # 2. 側邊/上方篩選器
@@ -141,11 +156,14 @@ def show(client, user_email, real_name, is_manager):
             target_users = []
             
             # 取得所有相關人員清單 (排除空值)
-            all_sales_in_data = sorted(list(set(
-                df_original["填寫人"].dropna().unique().tolist() + 
-                df_original["客戶所屬"].dropna().unique().tolist()
-            )))
-            all_sales_in_data = [x for x in all_sales_in_data if str(x).strip() != ""]
+            # 這裡需要處理可能沒有 "填寫人" 或 "客戶所屬" 的情況 (雖然上面檢查過了)
+            cols_to_check = [c for c in ["填寫人", "客戶所屬"] if c in df_original.columns]
+            
+            all_sales_in_data = set()
+            for c in cols_to_check:
+                all_sales_in_data.update(df_original[c].dropna().unique().tolist())
+                
+            all_sales_in_data = sorted([x for x in list(all_sales_in_data) if str(x).strip() != ""])
 
             if is_manager:
                 # 管理員模式：可選多人
@@ -189,15 +207,18 @@ def show(client, user_email, real_name, is_manager):
     mask_date = (df_original["拜訪日期_dt"] >= start_date) & (df_original["拜訪日期_dt"] <= end_date)
     df_filtered = df_original.loc[mask_date].copy()
 
-    # 步驟 B: 人員過濾 (邏輯：填寫人 IN target_users OR 客戶所屬 IN target_users)
+    # 步驟 B: 人員過濾
     if not target_users:
         st.warning("請選擇至少一位業務員")
         return
 
-    mask_user = (
-        df_filtered["填寫人"].isin(target_users) | 
-        df_filtered["客戶所屬"].isin(target_users)
-    )
+    # 構建人員遮罩
+    mask_user = pd.Series([False] * len(df_filtered), index=df_filtered.index)
+    if "填寫人" in df_filtered.columns:
+        mask_user |= df_filtered["填寫人"].isin(target_users)
+    if "客戶所屬" in df_filtered.columns:
+        mask_user |= df_filtered["客戶所屬"].isin(target_users)
+        
     df_filtered = df_filtered[mask_user]
     
     # 步驟 C: 進階屬性過濾 (產業 & 產品)
@@ -208,7 +229,7 @@ def show(client, user_email, real_name, is_manager):
                 all_industries = sorted(list(set([x for x in df_filtered["產業別"].unique() if x])))
                 sel_industry = st.multiselect("產業別", options=all_industries)
             with c2:
-                # 產品可能包含多選字串 (e.g. "士林品, 三菱品")，這裡做簡單篩選
+                # 產品可能包含多選字串
                 sel_product_kw = st.text_input("產品關鍵字 (例如: 士林)", help="篩選推廣產品欄位")
             with c3:
                 all_channels = sorted(list(set([x for x in df_filtered["通路商"].unique() if x])))
@@ -276,25 +297,25 @@ def show(client, user_email, real_name, is_manager):
     # 6. 詳細資料表
     st.subheader("📝 詳細列表")
     
-    # 選擇要顯示的欄位 (隱藏系統欄位)
+    # 選擇要顯示的欄位 (這裡使用內部標準名稱)
     display_cols = [
         "拜訪日期", "填寫人", "客戶所屬", "客戶名稱", "產業別", 
-        "推廣產品", "總金額", "行動方案", "目前狀況", "產出日期"
+        "推廣產品", "總金額", "行動方案", "實際行程", "產出日期"
     ]
     # 確保欄位存在
     final_cols = [c for c in display_cols if c in df_filtered.columns]
     
-    # 如果有「實際行程」，在顯示時重新命名為「目前狀況」比較直觀，若無則跳過
-    rename_map = {"實際行程": "目前狀況"}
-    display_df = df_filtered.rename(columns=rename_map)
-    # 更新 final_cols 中的名稱
-    final_cols = [rename_map.get(c, c) for c in final_cols]
+    # 重新命名欄位以便閱讀 (例如將 "實際行程" 顯示為 "目前狀況")
+    ui_rename_map = {"實際行程": "目前狀況"}
+    display_df = df_filtered.rename(columns=ui_rename_map)
+    # 更新要顯示的 columns list
+    final_cols_ui = [ui_rename_map.get(c, c) for c in final_cols]
     
     # 排序
     display_df = display_df.sort_values(by="拜訪日期", ascending=False)
 
     st.dataframe(
-        display_df[final_cols],
+        display_df[final_cols_ui],
         use_container_width=True,
         hide_index=True,
         column_config={
