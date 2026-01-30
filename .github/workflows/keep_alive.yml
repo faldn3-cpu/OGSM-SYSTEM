@@ -2,21 +2,16 @@ name: Wake Up Streamlit
 
 on:
   schedule:
-    # 說明：UTC 時間 23:00 ~ 11:00 對應台灣時間 07:00 ~ 19:00
-    # 設定：在上班時間內，每 20 分鐘喚醒一次 (*/20)
-    # 這樣可以確保您隨時打開都在 20 分鐘的安全範圍內
-    - cron: "*/20 23-11 * * *" 
-  workflow_dispatch: # 允許手動執行測試
+    # 台灣時間 07:00 ~ 19:00 (UTC 23:00 ~ 11:00)
+    # 每 20 分鐘喚醒一次，確保不睡著
+    - cron: "*/20 23-11 * * *"
+  workflow_dispatch: # 允許手動按按鈕測試
 
 jobs:
   wake-up:
     runs-on: ubuntu-latest
     steps:
       - name: Send Wake Up Signal
-        # 修改重點：
-        # 1. 加入 -A (User-Agent) 偽裝成 Chrome 瀏覽器，避免被判定為機器人
-        # 2. 加入 -L (Follow Redirects) 確保如果網址轉跳也能跟隨
-        # 3. 請記得將下方網址換成您真正的專案網址！
         run: |
           curl -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36" \
           https://seecfa-ogsm-system.streamlit.app/?wake_up=true
