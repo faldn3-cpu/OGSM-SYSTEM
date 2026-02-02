@@ -141,7 +141,7 @@ def save_to_crm_db(data_dict):
 #  JS 複製按鈕 (保留原功能)
 # ==========================================
 def render_copy_button(text):
-    safe_text = text.replace("`", "\`").replace("\\", "\\\\").replace("$", "\\$").replace("\n", "\\n")
+    safe_text = text.replace("`", "\\`").replace("\\", "\\\\").replace("$", "\\$").replace("\n", "\\n")
     html = f"""
     <script>
     function copyToClipboard() {{
