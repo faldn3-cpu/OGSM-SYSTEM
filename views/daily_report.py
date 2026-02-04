@@ -300,7 +300,7 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
         ws.clear()
         ws.update(values=val_list, range_name='A1')
         
-        # 【修正】徹底清除快取以解決「需存兩次」的問題
+        # 【修正】徹底清除快取，防止需要按兩次儲存的問題
         if "daily_data_cache" in st.session_state:
             del st.session_state.daily_data_cache
         if "daily_data_key" in st.session_state:
@@ -313,10 +313,10 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
         return False, str(e)
 
 # ==========================================
-#  【修正】儲存至客戶關係表單 (物理定位法)
+#  新增函式：儲存至客戶關係表單
 # ==========================================
 def save_to_crm_sheet(client, data_dict):
-    """將資料寫入客戶關係表單 (回覆)，使用物理定位法防止覆蓋"""
+    """將資料寫入客戶關係表單 (回覆)"""
     try:
         sh = client.open(CRM_DB_NAME)
         try:
@@ -353,16 +353,18 @@ def save_to_crm_sheet(client, data_dict):
         # 【資安強化】套用輸入清洗
         cleaned_row_data = [sanitize_csv_field(val) for val in raw_row_data]
         
-        # 【Bug 修正】物理定位法：計算目前有幾列資料，確保寫在下一列
-        # 讀取 A 欄 (時間戳記) 所有的值，計算長度
-        # col_values(1) 會回傳第一欄所有有值的儲存格列表
-        col_a_values = ws.col_values(1)
-        next_row = len(col_a_values) + 1
-        
-        # 使用 update 直接寫入指定列，避免 append_row 因格式誤判空行
-        # range_name 例如 'A10'
-        ws.update(values=[cleaned_row_data], range_name=f"A{next_row}")
-        
+        # 【修正】使用物理定位法 (Safe Append)
+        # 防止因表格格式導致自動判斷錯誤而覆蓋資料
+        try:
+            # 讀取 A 欄 (Timestamp) 確認目前行數
+            col_a = ws.col_values(1) 
+            next_row = len(col_a) + 1
+            ws.update(values=[cleaned_row_data], range_name=f"A{next_row}")
+        except Exception as update_err:
+            # 如果讀取 A 欄失敗，退回使用 append_row (備援)
+            logging.warning(f"Physical append failed, fallback to append_row: {update_err}")
+            ws.append_row(cleaned_row_data)
+
         return True, "上傳成功"
     except Exception as e:
         logging.error(f"Save to CRM failed: {e}")
@@ -466,32 +468,28 @@ def render_copy_button(text_to_copy):
 #  主顯示函式 (模式切換架構)
 # ==========================================
 def show(client, db_name, user_email, real_name):
-    # 【UI 優化】注入 CSS 以加大卷軸寬度與顏色，方便拖曳
-    st.markdown("""
-    <style>
-    /* 加寬卷軸 */
-    ::-webkit-scrollbar {
-        width: 12px;
-        height: 12px;
-    }
-    /* 卷軸軌道 */
-    ::-webkit-scrollbar-track {
-        background: #f1f1f1; 
-        border-radius: 6px;
-    }
-    /* 卷軸本體 */
-    ::-webkit-scrollbar-thumb {
-        background: #888; 
-        border-radius: 6px;
-    }
-    /* 卷軸懸停 */
-    ::-webkit-scrollbar-thumb:hover {
-        background: #555; 
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
     st.title(f"📝 {real_name} 的業務日報")
+    
+    # 【新增】CSS 注入：優化卷軸樣式 (寬度 24px + 深色)
+    st.markdown("""
+        <style>
+        /* 加大卷軸寬度與顏色，提升可點擊性 */
+        ::-webkit-scrollbar {
+            width: 24px;
+            height: 24px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 12px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        </style>
+    """, unsafe_allow_html=True)
     
     # 1. 狀態管理初始化
     if "dr_mode" not in st.session_state:
@@ -567,13 +565,13 @@ def show(client, db_name, user_email, real_name):
                 st.rerun()
 
         # 表格顯示 (加入 Sync 觸發偵測)
-        # 【UI 優化】設定 height=800 以顯示約 20 筆資料
+        # 【修正】設定 height=600 以顯示更多列數
         edited_df = st.data_editor(
             current_df,
             num_rows="dynamic",
             hide_index=True,
             use_container_width=True,
-            height=800,  # 調整高度
+            height=600, 
             column_config={
                 "選取": st.column_config.CheckboxColumn("LINE日報", width="small", help="勾選以加入下方 LINE 日報文字"),
                 "同步": st.column_config.CheckboxColumn("同步", width="small", help="點擊此處跳轉至客戶關係表單填寫"),
@@ -602,8 +600,9 @@ def show(client, db_name, user_email, real_name):
                 success, msg = save_to_google_sheet(ws, all_df, df_to_save, start_date, end_date)
                 if success:
                     st.success("✅ 修改已儲存!")
-                    time.sleep(0.5) # 稍作等待
-                    st.rerun()      # 強制刷新，確保「儲存需按兩次」的問題解決
+                    # 【修正】確保快取清除後，強制重新整理畫面，避免需按兩次
+                    time.sleep(0.5)
+                    st.rerun()
                 else:
                     st.error(f"儲存失敗: {msg}")
 
