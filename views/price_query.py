@@ -4,6 +4,7 @@ import gspread
 import re
 import logging
 from datetime import datetime, timezone, timedelta
+import html  # 【新增】引入 html 模組用於 XSS 防護
 
 # ==========================================
 #  1. 輔助函式與快取
@@ -232,6 +233,10 @@ def show(client, db_name, user_email, real_name, is_manager):
                     if val: desc_parts.append(val)
                 product_desc = " | ".join(desc_parts)
 
+                # 【資安強化】XSS 防護：在渲染 HTML 前進行 Escape
+                product_name_esc = html.escape(product_name)
+                product_desc_esc = html.escape(product_desc)
+
                 # 3. 嚴格經銷價判斷逻辑
                 price_col = None
                 
@@ -264,9 +269,10 @@ def show(client, db_name, user_email, real_name, is_manager):
                 with st.container():
                     c1, c2 = st.columns([3, 1])
                     with c1:
+                        # 使用 escape 後的變數進行渲染
                         st.markdown(f"""
-                        <div class="card-title">{product_name}</div>
-                        <div class="card-desc">{product_desc}</div>
+                        <div class="card-title">{product_name_esc}</div>
+                        <div class="card-desc">{product_desc_esc}</div>
                         <div class="card-price">{price_display}</div>
                         """, unsafe_allow_html=True)
 
@@ -275,9 +281,12 @@ def show(client, db_name, user_email, real_name, is_manager):
                         if base_price > 0:
                             if st.button("試算", key=f"btn_{idx}", use_container_width=True):
                                 # 【修正 2】點擊試算時，額外記錄一筆包含「產品名稱」的 Log
-                                # 這樣就能確保 Logs 裡面有 "AC05TB" 這樣的具體型號，而不只是 "線材"
+                                # 這裡的 product_name 因為是寫入 Log，所以不需要 Escape HTML，保留原樣較佳
                                 write_search_log(client, db_name, user_email, product_name, "試算選取")
-                                show_calculator_dialog(product_name, product_desc, base_price)
+                                # 傳入 Dialog 的內容同樣會被 st.markdown 渲染，建議這裡也使用 escape 版
+                                # 但 Dialog 函式內部若有其他處理，需視情況而定。
+                                # 這裡我們傳入 raw string，讓 Dialog 內部顯示（Dialog 內部目前也用了 unsafe_allow_html，所以傳入 escape 版是安全的）
+                                show_calculator_dialog(product_name_esc, product_desc_esc, base_price)
                         else:
                             st.caption("無法試算")
                     

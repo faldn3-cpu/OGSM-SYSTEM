@@ -304,6 +304,16 @@ def show(client, db_name, user_email, real_name, is_manager):
     if not target_users:
         return
 
+    # 【資安強化】權限二確 (Permission Double-Check)
+    # 在開始查詢資料前，再次驗證權限，防止 Session 竄改或邏輯漏洞
+    if not is_manager:
+        # 非管理員，必須確保查詢對象只有自己
+        invalid_targets = [u for u in target_users if u != real_name]
+        if invalid_targets:
+            st.error("⛔ 安全警告：權限異常，您無法查看其他人的資料。")
+            logging.warning(f"SECURITY ALERT: User {real_name} tried to access {invalid_targets}")
+            return
+
     st.markdown("---")
     
     # === 3. 讀取與顯示 (智慧速率限制版) ===

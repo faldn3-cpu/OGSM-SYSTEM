@@ -236,6 +236,26 @@ def load_data_by_range_cached(ws, start_date, end_date):
         logging.error(f"Failed to load data: {e}")
         return pd.DataFrame(columns=["日期", "客戶名稱", "客戶分類", "工作內容", "實際行程", "最後更新時間"]), pd.DataFrame()
 
+# ==========================================
+#  【新增】輸入清洗 (防止 CSV Injection)
+# ==========================================
+def sanitize_csv_field(value):
+    """
+    清理寫入 CSV/Sheet 的欄位以防注入攻擊。
+    若欄位以 =, +, -, @ 開頭，則在前方加入單引號。
+    """
+    if not isinstance(value, str):
+        return value
+    
+    # 移除前後空白後檢查
+    val_str = str(value).strip()
+    dangerous_chars = ['=', '+', '-', '@']
+    
+    if val_str and val_str[0] in dangerous_chars:
+        return "'" + val_str
+    
+    return value
+
 @rate_limit_save(max_calls=5, period=60)
 def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
     """將目前的 DataFrame 完整存回 Google Sheet，並清除快取"""
@@ -271,6 +291,10 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
         final_df = final_df.fillna("")
         final_df["日期"] = final_df["日期"].astype(str)
 
+        # 【資安強化】套用輸入清洗
+        # 針對所有欄位進行檢查，防止 Excel Injection
+        final_df = final_df.applymap(sanitize_csv_field)
+
         # 6. 寫入
         val_list = [final_df.columns.values.tolist()] + final_df.values.tolist()
         ws.clear()
@@ -301,7 +325,8 @@ def save_to_crm_sheet(client, data_dict):
         timestamp_str = get_crm_time_str()             # 格式: 2026/1/26 下午 4:15:05
         date_str = format_crm_date(data_dict.get("拜訪日期", "")) # 格式: 2026/1/22
         
-        row_data = [
+        # 原始資料列表
+        raw_row_data = [
             timestamp_str,                  # A1 時間戳記
             data_dict.get("填寫人", ""),     # B1
             data_dict.get("客戶名稱", ""),   # C1
@@ -322,7 +347,10 @@ def save_to_crm_sheet(client, data_dict):
             data_dict.get("客戶所屬", "")    # R1
         ]
         
-        ws.append_row(row_data)
+        # 【資安強化】套用輸入清洗
+        cleaned_row_data = [sanitize_csv_field(val) for val in raw_row_data]
+        
+        ws.append_row(cleaned_row_data)
         return True, "上傳成功"
     except Exception as e:
         logging.error(f"Save to CRM failed: {e}")

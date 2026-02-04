@@ -219,6 +219,15 @@ def show(client, user_email, real_name, is_manager):
         st.warning("請選擇完整的日期區間")
         return
 
+    # 【資安強化】權限二確 (Permission Double-Check)
+    if not is_manager:
+        # 非管理員，查詢對象必須只有自己
+        invalid_targets = [u for u in target_users if u != real_name]
+        if invalid_targets:
+            st.error("⛔ 安全警告：權限異常，您無法查看其他人的資料。")
+            logging.warning(f"SECURITY ALERT (CRM): User {real_name} tried to access {invalid_targets}")
+            return
+
     # 3. 資料過濾邏輯
     # 步驟 A: 日期過濾
     mask_date = (df_original["拜訪日期_dt"] >= start_date) & (df_original["拜訪日期_dt"] <= end_date)
