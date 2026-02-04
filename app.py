@@ -14,6 +14,7 @@ import extra_streamlit_components as stx
 import logging
 from functools import wraps
 import traceback 
+import re # 新增 re 模組用於正則表達式
 
 # 匯入頁面模組 (已新增 crm_overview)
 from views import price_query, daily_report, report_overview, crm_overview
@@ -159,8 +160,64 @@ if 'reset_stage' not in st.session_state: st.session_state.reset_stage = 0
 if 'reset_otp' not in st.session_state: st.session_state.reset_otp = ""
 if 'reset_target_email' not in st.session_state: st.session_state.reset_target_email = ""
 if 'cleanup_checked' not in st.session_state: st.session_state.cleanup_checked = False
+if 'force_change_password' not in st.session_state: st.session_state.force_change_password = False # 新增強制換密碼 flag
 # 連線錯誤訊息暫存
 if 'connection_error_msg' not in st.session_state: st.session_state.connection_error_msg = ""
+
+# ==========================================
+#  🔒 安全性功能：全域鎖定與密碼強度
+# ==========================================
+# 使用 cache_resource 確保變數跨 Session 存在，實現記憶體全域變數效果
+@st.cache_resource
+def get_global_login_tracker():
+    return {}
+
+LOGIN_ATTEMPTS_TRACKER = get_global_login_tracker()
+
+def check_is_locked(email):
+    """檢查帳號是否被鎖定"""
+    if not email: return False, ""
+    record = LOGIN_ATTEMPTS_TRACKER.get(email)
+    if not record: return False, ""
+    
+    # 規則：錯誤 3 次，鎖定 5 分鐘 (300秒)
+    if record['count'] >= 3:
+        elapsed = time.time() - record['last_time']
+        if elapsed < 300:
+            remaining = int(300 - elapsed)
+            return True, f"帳號已鎖定，請於 {remaining} 秒後再試"
+        else:
+            # 時間到，解鎖 (重置計數)
+            LOGIN_ATTEMPTS_TRACKER[email] = {'count': 0, 'last_time': time.time()}
+            return False, ""
+    return False, ""
+
+def record_login_fail(email):
+    """記錄登入失敗"""
+    if not email: return
+    now = time.time()
+    if email not in LOGIN_ATTEMPTS_TRACKER:
+        LOGIN_ATTEMPTS_TRACKER[email] = {'count': 1, 'last_time': now}
+    else:
+        LOGIN_ATTEMPTS_TRACKER[email]['count'] += 1
+        LOGIN_ATTEMPTS_TRACKER[email]['last_time'] = now
+
+def reset_login_attempts(email):
+    """登入成功，重置計數"""
+    if email in LOGIN_ATTEMPTS_TRACKER:
+        del LOGIN_ATTEMPTS_TRACKER[email]
+
+def check_password_strength(password):
+    """
+    強密碼策略：
+    1. 至少 8 碼
+    2. 包含英文與數字
+    """
+    if len(password) < 8:
+        return False, "密碼長度不足 (至少 8 碼)"
+    if not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
+        return False, "密碼需包含英文與數字"
+    return True, "OK"
 
 # ==========================================
 #  🔒 安全性功能：速率限制器
@@ -381,31 +438,46 @@ def send_otp_email(to_email, otp_code):
         return True, "已發送"
     except Exception as e: return False, str(e)
 
-# 【強化】登入函式：加入失敗紀錄
+# 【強化】登入函式：加入延遲、模糊錯誤與全域鎖定
 def login(email, password):
+    # 1. 檢查帳號鎖定狀態
+    is_locked, lock_msg = check_is_locked(email)
+    if is_locked:
+        return False, lock_msg
+
     client = get_client()
     if not client: return False, "連線失敗: 無法建立 Google 連線"
+    
     try:
         sh = client.open(PRICE_DB_NAME)
         ws = sh.worksheet("Users")
         users = ws.get_all_records()
         
         email_found = False
+        login_success = False
+        user_name = ""
+
         for user in users:
             if str(user.get('email')).strip() == email.strip():
                 email_found = True
                 if check_password(password, str(user.get('password'))):
-                    return True, str(user.get('name')) or email
-                else:
-                    # 密碼錯誤 - 寫入 Log
-                    write_log("LOGIN_FAILED", email, "密碼錯誤")
-                    return False, "帳號或密碼錯誤"
+                    login_success = True
+                    user_name = str(user.get('name')) or email
+                    break
         
-        if not email_found:
-            # 帳號不存在 - 寫入 Log (可選，防範 User Enum 攻擊)
-            write_log("LOGIN_FAILED", email, "帳號不存在")
+        if login_success:
+            # 登入成功，清除錯誤計數
+            reset_login_attempts(email)
+            return True, user_name
+        else:
+            # 登入失敗 (密碼錯誤或帳號不存在)
+            record_login_fail(email)
+            write_log("LOGIN_FAILED", email, "帳號或密碼錯誤") # Log 內部可保持詳細，但前端模糊
             
-        return False, "帳號或密碼錯誤"
+            # 安全延遲 2 秒，防範掃描
+            time.sleep(2)
+            return False, "帳號或密碼錯誤" # 模糊錯誤訊息
+
     except Exception as e:
         return False, f"登入驗證失敗: {str(e)}"
 
@@ -460,8 +532,9 @@ def main():
             st.header("🔒 士林電機FA 業務系統")
             
             if st.session_state.login_attempts >= 3:
-                st.error("⚠️ 嘗試次數過多，請重整頁面")
-                return
+                # 注意：這裡的 login_attempts 是 session 級別的簡易計數
+                # 真正的鎖定邏輯在 login() 函式內的全域變數處理
+                pass
 
             tab1, tab2 = st.tabs(["會員登入", "忘記密碼"])
             with tab1:
@@ -489,6 +562,14 @@ def main():
                                 time.sleep(1.5)
 
                                 post_login_init(email, result)
+                                
+                                # 【舊密碼攔截】登入成功後，檢查輸入的明文密碼是否符合強密碼規則
+                                is_strong, str_msg = check_password_strength(pwd)
+                                if not is_strong:
+                                    st.session_state.force_change_password = True
+                                else:
+                                    st.session_state.force_change_password = False
+                                
                                 st.rerun()
                             else:
                                 st.session_state.login_attempts += 1
@@ -518,9 +599,12 @@ def main():
                         st.session_state.reset_stage = 0
                         st.rerun()
                     otp_in = st.text_input("輸入驗證碼", max_chars=6)
-                    new_pw = st.text_input("新密碼 (至少 6 位)", type="password", max_chars=50)
+                    new_pw = st.text_input("新密碼 (至少 8 位，含英數)", type="password", max_chars=50)
                     if st.button("確認重置", use_container_width=True):
-                        if len(new_pw) < 6: st.error("密碼至少需要 6 個字元")
+                        # 強密碼檢查
+                        is_strong, str_msg = check_password_strength(new_pw)
+                        if not is_strong:
+                            st.error(f"密碼強度不足：{str_msg}")
                         elif otp_in == st.session_state.reset_otp:
                             if change_password(st.session_state.reset_target_email, new_pw):
                                 st.success("✅ 密碼已重置，請重新登入")
@@ -545,6 +629,33 @@ def main():
         b_time = get_system_boot_time()
         st.caption(f"🕒 系統目前時間: {c_time} | 🚀 系統啟動時間: {b_time}")
         
+        return
+
+    # === 強制修改密碼攔截流程 ===
+    if st.session_state.get("force_change_password", False):
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.warning("⚠️ 您的密碼安全性不足 (需 8 碼且包含英數字)，請立即更新密碼才能繼續使用。")
+            with st.form("force_change_pwd_form"):
+                p1 = st.text_input("設定新密碼 (至少 8 位，含英數)", type="password", max_chars=50)
+                p2 = st.text_input("確認新密碼", type="password", max_chars=50)
+                
+                if st.form_submit_button("確認修改並進入系統", use_container_width=True):
+                    is_strong, str_msg = check_password_strength(p1)
+                    if not is_strong:
+                        st.error(f"❌ {str_msg}")
+                    elif p1 != p2:
+                        st.error("❌ 兩次密碼輸入不一致")
+                    else:
+                        if change_password(st.session_state.user_email, p1):
+                            st.success("✅ 密碼更新成功！正在進入系統...")
+                            st.session_state.force_change_password = False
+                            time.sleep(1.5)
+                            st.rerun()
+                        else:
+                            st.error("修改失敗，請聯繫管理員")
+        
+        # 攔截狀態下，不渲染側邊欄與其他內容
         return
 
     # === 側邊欄 ===
@@ -605,11 +716,12 @@ def main():
         crm_overview.show(client, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
     elif sel == "🔑 修改密碼":
         st.subheader("修改密碼")
-        p1 = st.text_input("新密碼 (至少 6 位)", type="password", max_chars=50)
+        p1 = st.text_input("新密碼 (至少 8 位，含英數)", type="password", max_chars=50)
         p2 = st.text_input("確認新密碼", type="password", max_chars=50)
         if st.button("確認", use_container_width=True):
+            is_strong, str_msg = check_password_strength(p1)
             if not p1 or not p2: st.error("請輸入完整資訊")
-            elif len(p1) < 6: st.error("密碼至少需要 6 個字元")
+            elif not is_strong: st.error(f"❌ {str_msg}")
             elif p1 != p2: st.error("兩次密碼輸入不一致")
             else:
                 if change_password(st.session_state.user_email, p1):
