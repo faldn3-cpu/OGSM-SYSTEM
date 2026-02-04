@@ -3,8 +3,16 @@ import pandas as pd
 import gspread
 import re
 import logging
+import os
+import time
 from datetime import datetime, timezone, timedelta
-import html  # 【新增】引入 html 模組用於 XSS 防護
+import html  # 引入 html 模組用於 XSS 防護
+
+# ==========================================
+#  設定：快取與檔案
+# ==========================================
+CACHE_FILE = "price_cache.parquet"
+CACHE_TTL = 86400  # 24 小時 (秒)
 
 # ==========================================
 #  1. 輔助函式與快取
@@ -14,8 +22,11 @@ def get_tw_time():
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 def write_search_log(client, db_name, user_email, query, result_count):
-    """記錄搜尋行為 (BI 商業分析用)"""
+    """記錄搜尋行為 (BI 商業分析用) - 採非阻斷式設計"""
     try:
+        # 如果是離線狀態或 client 為 None，直接跳過記錄
+        if not client: return
+        
         sh = client.open(db_name)
         try: 
             ws = sh.worksheet("SearchLogs")
@@ -31,34 +42,14 @@ def write_search_log(client, db_name, user_email, query, result_count):
 def fetch_last_update_date(db_name, _client):
     """讀取 Users 頁面的 D1 儲存格作為更新日期"""
     try:
+        if not _client: return "離線模式"
         sh = _client.open(db_name)
         ws = sh.worksheet("Users")
         val = ws.acell('D1').value
         return str(val) if val else "未知"
     except Exception as e:
         logging.warning(f"Failed to fetch update date: {e}")
-        return "未知"
-
-@st.cache_data(ttl=3600, show_spinner="正在從雲端下載最新價格表...")
-def fetch_price_data(db_name, _client):
-    try:
-        sh = _client.open(db_name)
-        try:
-            ws = sh.worksheet("經銷價(總)")
-        except gspread.WorksheetNotFound:
-            ws = sh.sheet1
-            
-        data = ws.get_all_records()
-        if not data: return pd.DataFrame()
-        
-        df = pd.DataFrame(data)
-        df = df.dropna(how='all')
-        df = df.astype(str)
-        return df
-    except Exception as e:
-        st.error(f"資料讀取錯誤: {e}")
-        logging.error(f"Price data fetch failed: {e}")
-        return pd.DataFrame()
+        return "暫無法取得"
 
 def clean_currency(val):
     """將含有 $ , 或文字的價格字串轉為 float"""
@@ -69,6 +60,80 @@ def clean_currency(val):
         return float(clean_str)
     except ValueError:
         return 0.0
+
+# ==========================================
+#  【核心優化】本地快照讀取邏輯
+# ==========================================
+@st.cache_data(ttl=300, show_spinner="正在讀取價格資料...")
+def fetch_price_data(db_name, _client):
+    """
+    極致效能版資料讀取：
+    1. 優先檢查本地 Parquet 快照。
+    2. 若快照存在且新鮮 (<24h)，直接讀取 (毫秒級)。
+    3. 若快照過期或不存在，嘗試從 Google 下載並更新快照。
+    4. 若 Google 連線失敗，強制使用舊快照並發出警告。
+    """
+    
+    # 檢查本地快取狀態
+    cache_exists = os.path.exists(CACHE_FILE)
+    cache_is_fresh = False
+    
+    if cache_exists:
+        mtime = os.path.getmtime(CACHE_FILE)
+        if (time.time() - mtime) < CACHE_TTL:
+            cache_is_fresh = True
+
+    # === 路徑 A: 快取新鮮，直接回傳 ===
+    if cache_exists and cache_is_fresh:
+        try:
+            logging.info("Loading price data from local cache (Fresh).")
+            return pd.read_parquet(CACHE_FILE), "" # 回傳 (df, warning_msg)
+        except Exception as e:
+            logging.error(f"Local cache read error: {e}")
+            # 若讀取失敗，視為不存在，繼續往下走
+
+    # === 路徑 B: 需要更新 (不存在 或 已過期) ===
+    # 嘗試連線 Google Sheets
+    if _client:
+        try:
+            logging.info("Fetching price data from Google Sheets...")
+            sh = _client.open(db_name)
+            try:
+                ws = sh.worksheet("經銷價(總)")
+            except gspread.WorksheetNotFound:
+                ws = sh.sheet1
+                
+            data = ws.get_all_records()
+            if data:
+                df = pd.DataFrame(data)
+                df = df.dropna(how='all')
+                df = df.astype(str) # 確保格式一致
+                
+                # 寫入本地快照 (使用 Parquet)
+                try:
+                    df.to_parquet(CACHE_FILE, index=False)
+                    logging.info("Local cache updated successfully.")
+                except Exception as save_err:
+                    logging.warning(f"Failed to save local cache: {save_err}")
+                
+                return df, ""
+        except Exception as e:
+            logging.error(f"Google Fetch failed: {e}")
+            # 連線失敗，繼續往下嘗試使用舊快取
+
+    # === 路徑 C: 連線失敗，Fallback 到舊快取 ===
+    if cache_exists:
+        try:
+            logging.warning("Using stale cache due to connection failure.")
+            # 計算過期多久
+            mtime = os.path.getmtime(CACHE_FILE)
+            hours_old = (time.time() - mtime) / 3600
+            warning_msg = f"⚠️ 目前使用離線資料 (上次更新: {hours_old:.1f} 小時前)，請檢查網路連線。"
+            return pd.read_parquet(CACHE_FILE), warning_msg
+        except Exception as e:
+            return pd.DataFrame(), f"❌ 無法讀取資料: {e}"
+            
+    return pd.DataFrame(), "❌ 無法連線至資料庫，且無本地存檔。"
 
 # ==========================================
 #  2. 輸入驗證
@@ -88,7 +153,6 @@ def sanitize_search_query(query):
 # ==========================================
 @st.dialog("🧮 業務報價試算")
 def show_calculator_dialog(spec, desc, base_price):
-    # 【修正 1】將 "經銷底價:" 修改為 "經銷價："
     st.markdown(f"""
     <div style="background-color:#f8f9fa; padding:10px; border-radius:8px; margin-bottom:15px;">
         <div style="font-weight:bold; font-size:1.1em; color:#333;">{spec}</div>
@@ -124,12 +188,10 @@ def show_calculator_dialog(spec, desc, base_price):
     with col1:
         st.number_input("販售折數 (%)", min_value=0.0, max_value=300.0, step=0.5, format="%.2f", key="calc_discount", on_change=on_discount_change)
     with col2:
-        # 【說明】Streamlit 的 st.number_input 不支援輸入時顯示千分位 (%,d)，維持 %d (整數) 是最穩定的做法
         st.number_input("販售價格 ($)", min_value=0, step=100, format="%d", key="calc_price", on_change=on_price_change)
     
     final_p = st.session_state.calc_price
     
-    # 這裡的最終金額顯示已經包含千分位 (final_p:,.0f)
     st.markdown(f"""
     <div style="
         margin-top: 15px; padding: 15px;
@@ -147,8 +209,15 @@ def show_calculator_dialog(spec, desc, base_price):
 def show(client, db_name, user_email, real_name, is_manager):
     st.title("💰 經銷牌價查詢")
     
+    # 讀取資料 (使用優化後的函式)
+    # df 為資料表, warning 為離線警告訊息
+    df, warning_msg = fetch_price_data(db_name, client)
+    
     update_date = fetch_last_update_date(db_name, client)
     st.caption(f"資料更新日期：{update_date}")
+
+    if warning_msg:
+        st.warning(warning_msg)
     
     # CSS 優化
     st.markdown("""
@@ -181,7 +250,6 @@ def show(client, db_name, user_email, real_name, is_manager):
     with st.container(border=True):
         col1, col2 = st.columns([4, 1])
         with col1:
-            # 【修正 1】移除 placeholder 中的 "變頻器"
             query = st.text_input("🔍 關鍵字搜尋", placeholder="例: SDE, 55KW...", max_chars=MAX_SEARCH_LENGTH, key="price_search_box", label_visibility="collapsed")
         with col2:
             search_btn = st.button("搜尋", use_container_width=True, type="primary")
@@ -193,15 +261,16 @@ def show(client, db_name, user_email, real_name, is_manager):
             st.warning("⚠️ 請輸入關鍵字")
             return
 
-        df = fetch_price_data(db_name, client)
         if df.empty:
             st.error("無法讀取價格表，請聯繫管理員。")
             return
 
         try:
+            # 搜尋邏輯
             mask = df.apply(lambda row: row.astype(str).str.contains(query, case=False, regex=False).any(), axis=1)
             result_df = df[mask]
-            # 這裡保留原本的搜尋紀錄，記錄寬泛的關鍵字 (例如: 線材)
+            
+            # 記錄 Log
             write_search_log(client, db_name, user_email, query, len(result_df))
         except Exception as e:
             st.error("搜尋發生錯誤")
@@ -239,18 +308,12 @@ def show(client, db_name, user_email, real_name, is_manager):
 
                 # 3. 嚴格經銷價判斷逻辑
                 price_col = None
-                
-                # 策略 A: 找明確包含 "經銷" 且包含 "價" 的欄位
                 dist_price_cols = [c for c in df.columns if '經銷' in c and '價' in c]
-                
-                # 策略 B: 找包含 "經銷" 的欄位
                 if not dist_price_cols:
                     dist_price_cols = [c for c in df.columns if '經銷' in c]
 
                 if dist_price_cols:
                     price_col = dist_price_cols[0]
-                else:
-                    price_col = None 
 
                 base_price = 0
                 price_display = "請洽詢"
@@ -269,7 +332,7 @@ def show(client, db_name, user_email, real_name, is_manager):
                 with st.container():
                     c1, c2 = st.columns([3, 1])
                     with c1:
-                        # 使用 escape 後的變數進行渲染
+                        # 使用 escape 後的變數進行渲染，確保安全
                         st.markdown(f"""
                         <div class="card-title">{product_name_esc}</div>
                         <div class="card-desc">{product_desc_esc}</div>
@@ -280,12 +343,7 @@ def show(client, db_name, user_email, real_name, is_manager):
                         st.write("")
                         if base_price > 0:
                             if st.button("試算", key=f"btn_{idx}", use_container_width=True):
-                                # 【修正 2】點擊試算時，額外記錄一筆包含「產品名稱」的 Log
-                                # 這裡的 product_name 因為是寫入 Log，所以不需要 Escape HTML，保留原樣較佳
                                 write_search_log(client, db_name, user_email, product_name, "試算選取")
-                                # 傳入 Dialog 的內容同樣會被 st.markdown 渲染，建議這裡也使用 escape 版
-                                # 但 Dialog 函式內部若有其他處理，需視情況而定。
-                                # 這裡我們傳入 raw string，讓 Dialog 內部顯示（Dialog 內部目前也用了 unsafe_allow_html，所以傳入 escape 版是安全的）
                                 show_calculator_dialog(product_name_esc, product_desc_esc, base_price)
                         else:
                             st.caption("無法試算")
