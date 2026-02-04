@@ -54,6 +54,7 @@ if "wake_up" in st.query_params:
     
     st.write("Done. System is live.")
     st.stop()
+
 # ==========================================
 #  強制 HTTPS 檢查
 # ==========================================
@@ -518,218 +519,232 @@ def post_login_init(email, name, role_override=None):
 
 # === 主程式 ===
 def main():
-    cookie_manager = stx.CookieManager()
-    
-    # 嘗試連線
-    client = get_client()
-    if client:
-        auto_cleanup_logs(client)
+    # 【資安強化】錯誤遮蔽 (Error Masking)
+    # 使用 try-except 包覆主程式，避免 Traceback 直接顯示在前端
+    try:
+        cookie_manager = stx.CookieManager()
+        
+        # 嘗試連線
+        client = get_client()
+        if client:
+            auto_cleanup_logs(client)
 
-    if not st.session_state.logged_in:
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.markdown("<br><br>", unsafe_allow_html=True)
-            st.header("🔒 士林電機FA 業務系統")
+        if not st.session_state.logged_in:
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                st.markdown("<br><br>", unsafe_allow_html=True)
+                st.header("🔒 士林電機FA 業務系統")
+                
+                if st.session_state.login_attempts >= 3:
+                    # 注意：這裡的 login_attempts 是 session 級別的簡易計數
+                    # 真正的鎖定邏輯在 login() 函式內的全域變數處理
+                    pass
+
+                tab1, tab2 = st.tabs(["會員登入", "忘記密碼"])
+                with tab1:
+                    last_email = cookie_manager.get("last_email") or ""
+                    with st.form("login"):
+                        email = st.text_input("Email", value=last_email, max_chars=100, placeholder="請輸入您的 Email")
+                        pwd = st.text_input("密碼", type="password", max_chars=50, placeholder="請輸入密碼")
+                        remember_email = st.checkbox("記住帳號", value=True)
+                        if st.form_submit_button("登入", use_container_width=True):
+                            if not email or not pwd: st.error("請輸入完整資訊")
+                            else:
+                                success, result = login(email, pwd)
+                                if success:
+                                    write_session_log(email, result, action="LOGIN")
+
+                                    if remember_email:
+                                        try:
+                                            expires = datetime.now(timezone(timedelta(hours=8))) + timedelta(days=365)
+                                            cookie_manager.set("last_email", email, expires_at=expires, key="set_last_email_cookie")
+                                        except: pass
+                                    else:
+                                        try: cookie_manager.delete("last_email", key="del_last_email_cookie")
+                                        except: pass
+                                    
+                                    time.sleep(1.5)
+
+                                    post_login_init(email, result)
+                                    
+                                    # 【舊密碼攔截】登入成功後，檢查輸入的明文密碼是否符合強密碼規則
+                                    is_strong, str_msg = check_password_strength(pwd)
+                                    if not is_strong:
+                                        st.session_state.force_change_password = True
+                                    else:
+                                        st.session_state.force_change_password = False
+                                    
+                                    st.rerun()
+                                else:
+                                    st.session_state.login_attempts += 1
+                                    st.error(result)
+                with tab2:
+                    if st.session_state.reset_stage == 0:
+                       r_email = st.text_input("註冊 Email", key="reset_email_input")
+                       if st.button("發送驗證碼", use_container_width=True):
+                           if not r_email: st.error("請輸入 Email")
+                           elif check_email_exists(r_email):
+                               otp = "".join(random.choices(string.digits, k=6))
+                               st.session_state.reset_otp = otp
+                               st.session_state.reset_target_email = r_email
+                               st.session_state.reset_otp_time = time.time()
+                               sent, msg = send_otp_email(r_email, otp)
+                               if sent:
+                                   st.session_state.reset_stage = 1
+                                   st.success("✅ 驗證碼已發送，10 分鐘內有效")
+                                   time.sleep(1)
+                                   st.rerun()
+                               else: st.error(f"發送失敗: {msg}")
+                           else: st.error("Email 不存在")
+                    
+                    elif st.session_state.reset_stage == 1:
+                        if time.time() - st.session_state.get('reset_otp_time', 0) > 600:
+                            st.error("⏰ 驗證碼已過期，請重新發送")
+                            st.session_state.reset_stage = 0
+                            st.rerun()
+                        otp_in = st.text_input("輸入驗證碼", max_chars=6)
+                        new_pw = st.text_input("新密碼 (至少 8 位，含英數)", type="password", max_chars=50)
+                        if st.button("確認重置", use_container_width=True):
+                            # 強密碼檢查
+                            is_strong, str_msg = check_password_strength(new_pw)
+                            if not is_strong:
+                                st.error(f"密碼強度不足：{str_msg}")
+                            elif otp_in == st.session_state.reset_otp:
+                                if change_password(st.session_state.reset_target_email, new_pw):
+                                    st.success("✅ 密碼已重置，請重新登入")
+                                    st.session_state.reset_stage = 0
+                                    time.sleep(2)
+                                    st.rerun()
+                                else: st.error("重置失敗，請聯繫管理員")
+                            else: st.error("驗證碼錯誤")
+                        if st.button("← 返回", use_container_width=True):
+                            st.session_state.reset_stage = 0
+                            st.rerun()
             
-            if st.session_state.login_attempts >= 3:
-                # 注意：這裡的 login_attempts 是 session 級別的簡易計數
-                # 真正的鎖定邏輯在 login() 函式內的全域變數處理
-                pass
+            if not client:
+                st.error(f"❌ 無法連線資料庫，請檢查以下錯誤詳情。")
+                if st.session_state.connection_error_msg:
+                     with st.expander("🔍 點擊查看技術錯誤詳情 (供管理員除錯)", expanded=True):
+                        st.code(st.session_state.connection_error_msg, language="text")
+            
+            # 顯示系統時間資訊，協助判斷是否重啟
+            st.markdown("---")
+            c_time = get_tw_time()
+            b_time = get_system_boot_time()
+            st.caption(f"🕒 系統目前時間: {c_time} | 🚀 系統啟動時間: {b_time}")
+            
+            return
 
-            tab1, tab2 = st.tabs(["會員登入", "忘記密碼"])
-            with tab1:
-                last_email = cookie_manager.get("last_email") or ""
-                with st.form("login"):
-                    email = st.text_input("Email", value=last_email, max_chars=100, placeholder="請輸入您的 Email")
-                    pwd = st.text_input("密碼", type="password", max_chars=50, placeholder="請輸入密碼")
-                    remember_email = st.checkbox("記住帳號", value=True)
-                    if st.form_submit_button("登入", use_container_width=True):
-                        if not email or not pwd: st.error("請輸入完整資訊")
+        # === 強制修改密碼攔截流程 ===
+        if st.session_state.get("force_change_password", False):
+            col1, col2, col3 = st.columns([1, 2, 1])
+            with col2:
+                st.warning("⚠️ 您的密碼安全性不足 (需 8 碼且包含英數字)，請立即更新密碼才能繼續使用。")
+                with st.form("force_change_pwd_form"):
+                    p1 = st.text_input("設定新密碼 (至少 8 位，含英數)", type="password", max_chars=50)
+                    p2 = st.text_input("確認新密碼", type="password", max_chars=50)
+                    
+                    if st.form_submit_button("確認修改並進入系統", use_container_width=True):
+                        is_strong, str_msg = check_password_strength(p1)
+                        if not is_strong:
+                            st.error(f"❌ {str_msg}")
+                        elif p1 != p2:
+                            st.error("❌ 兩次密碼輸入不一致")
                         else:
-                            success, result = login(email, pwd)
-                            if success:
-                                write_session_log(email, result, action="LOGIN")
-
-                                if remember_email:
-                                    try:
-                                        expires = datetime.now(timezone(timedelta(hours=8))) + timedelta(days=365)
-                                        cookie_manager.set("last_email", email, expires_at=expires, key="set_last_email_cookie")
-                                    except: pass
-                                else:
-                                    try: cookie_manager.delete("last_email", key="del_last_email_cookie")
-                                    except: pass
-                                
+                            if change_password(st.session_state.user_email, p1):
+                                st.success("✅ 密碼更新成功！正在進入系統...")
+                                st.session_state.force_change_password = False
                                 time.sleep(1.5)
-
-                                post_login_init(email, result)
-                                
-                                # 【舊密碼攔截】登入成功後，檢查輸入的明文密碼是否符合強密碼規則
-                                is_strong, str_msg = check_password_strength(pwd)
-                                if not is_strong:
-                                    st.session_state.force_change_password = True
-                                else:
-                                    st.session_state.force_change_password = False
-                                
                                 st.rerun()
                             else:
-                                st.session_state.login_attempts += 1
-                                st.error(result)
-            with tab2:
-                if st.session_state.reset_stage == 0:
-                   r_email = st.text_input("註冊 Email", key="reset_email_input")
-                   if st.button("發送驗證碼", use_container_width=True):
-                       if not r_email: st.error("請輸入 Email")
-                       elif check_email_exists(r_email):
-                           otp = "".join(random.choices(string.digits, k=6))
-                           st.session_state.reset_otp = otp
-                           st.session_state.reset_target_email = r_email
-                           st.session_state.reset_otp_time = time.time()
-                           sent, msg = send_otp_email(r_email, otp)
-                           if sent:
-                               st.session_state.reset_stage = 1
-                               st.success("✅ 驗證碼已發送，10 分鐘內有效")
-                               time.sleep(1)
-                               st.rerun()
-                           else: st.error(f"發送失敗: {msg}")
-                       else: st.error("Email 不存在")
-                
-                elif st.session_state.reset_stage == 1:
-                    if time.time() - st.session_state.get('reset_otp_time', 0) > 600:
-                        st.error("⏰ 驗證碼已過期，請重新發送")
-                        st.session_state.reset_stage = 0
-                        st.rerun()
-                    otp_in = st.text_input("輸入驗證碼", max_chars=6)
-                    new_pw = st.text_input("新密碼 (至少 8 位，含英數)", type="password", max_chars=50)
-                    if st.button("確認重置", use_container_width=True):
-                        # 強密碼檢查
-                        is_strong, str_msg = check_password_strength(new_pw)
-                        if not is_strong:
-                            st.error(f"密碼強度不足：{str_msg}")
-                        elif otp_in == st.session_state.reset_otp:
-                            if change_password(st.session_state.reset_target_email, new_pw):
-                                st.success("✅ 密碼已重置，請重新登入")
-                                st.session_state.reset_stage = 0
-                                time.sleep(2)
-                                st.rerun()
-                            else: st.error("重置失敗，請聯繫管理員")
-                        else: st.error("驗證碼錯誤")
-                    if st.button("← 返回", use_container_width=True):
-                        st.session_state.reset_stage = 0
-                        st.rerun()
-        
-        if not client:
-            st.error(f"❌ 無法連線資料庫，請檢查以下錯誤詳情。")
-            if st.session_state.connection_error_msg:
-                 with st.expander("🔍 點擊查看技術錯誤詳情 (供管理員除錯)", expanded=True):
-                    st.code(st.session_state.connection_error_msg, language="text")
-        
-        # 顯示系統時間資訊，協助判斷是否重啟
-        st.markdown("---")
-        c_time = get_tw_time()
-        b_time = get_system_boot_time()
-        st.caption(f"🕒 系統目前時間: {c_time} | 🚀 系統啟動時間: {b_time}")
-        
-        return
-
-    # === 強制修改密碼攔截流程 ===
-    if st.session_state.get("force_change_password", False):
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.warning("⚠️ 您的密碼安全性不足 (需 8 碼且包含英數字)，請立即更新密碼才能繼續使用。")
-            with st.form("force_change_pwd_form"):
-                p1 = st.text_input("設定新密碼 (至少 8 位，含英數)", type="password", max_chars=50)
-                p2 = st.text_input("確認新密碼", type="password", max_chars=50)
-                
-                if st.form_submit_button("確認修改並進入系統", use_container_width=True):
-                    is_strong, str_msg = check_password_strength(p1)
-                    if not is_strong:
-                        st.error(f"❌ {str_msg}")
-                    elif p1 != p2:
-                        st.error("❌ 兩次密碼輸入不一致")
-                    else:
-                        if change_password(st.session_state.user_email, p1):
-                            st.success("✅ 密碼更新成功！正在進入系統...")
-                            st.session_state.force_change_password = False
-                            time.sleep(1.5)
-                            st.rerun()
-                        else:
-                            st.error("修改失敗，請聯繫管理員")
-        
-        # 攔截狀態下，不渲染側邊欄與其他內容
-        return
-
-    # === 側邊欄 ===
-    with st.sidebar:
-        greeting = get_greeting()
-        st.write(f"👤 **{st.session_state.real_name}**")
-        st.caption(f"{greeting}")
-        
-        current_email = st.session_state.user_email.strip().lower()
-        if current_email == "welsong@seec.com.tw":
-            st.markdown("---")
-            with st.expander("👑 管理員切換身份"):
-                all_records = get_users_list_cached()
-                if all_records:
-                    user_map = {f"{u.get('name')} ({u.get('email')})": u for u in all_records}
-                    target = st.selectbox("選擇模擬對象", list(user_map.keys()))
-                    if st.button("確認切換", type="primary"):
-                            t_user = user_map[target]
-                            post_login_init(t_user.get('email'), t_user.get('name'))
-                            st.rerun()
-
-        st.markdown("---")
-        
-        # 【修改】加入 "📊 CRM 商機總覽"
-        pages = ["📝 OGSM日報系統", "💰 牌價表查詢系統", "📊 OGSM日報總覽", "📊 CRM 商機總覽", "🔑 修改密碼", "👋 登出系統"]
-        sel = st.radio("功能", pages, key="page_radio", label_visibility="collapsed")
-        
-        st.markdown("---")
-        try:
-            file_timestamp = os.path.getmtime(__file__)
-            tw_time = datetime.fromtimestamp(file_timestamp, timezone(timedelta(hours=8)))
-            last_updated_str = tw_time.strftime('%Y-%m-%d %H:%M')
-            st.caption(f"檔案版本: {last_updated_str}")
-        except:
-            st.caption("Ver: Latest")
+                                st.error("修改失敗，請聯繫管理員")
             
-        boot_time = get_system_boot_time()
-        st.caption(f"系統啟動: {boot_time}")
+            # 攔截狀態下，不渲染側邊欄與其他內容
+            return
 
-    if sel == "👋 登出系統":
-        write_log("登出系統", st.session_state.user_email)
-        write_session_log(st.session_state.user_email, st.session_state.real_name, action="LOGOUT")
-        st.session_state.logged_in = False
-        st.rerun()
+        # === 側邊欄 ===
+        with st.sidebar:
+            greeting = get_greeting()
+            st.write(f"👤 **{st.session_state.real_name}**")
+            st.caption(f"{greeting}")
+            
+            current_email = st.session_state.user_email.strip().lower()
+            if current_email == "welsong@seec.com.tw":
+                st.markdown("---")
+                with st.expander("👑 管理員切換身份"):
+                    all_records = get_users_list_cached()
+                    if all_records:
+                        user_map = {f"{u.get('name')} ({u.get('email')})": u for u in all_records}
+                        target = st.selectbox("選擇模擬對象", list(user_map.keys()))
+                        if st.button("確認切換", type="primary"):
+                                t_user = user_map[target]
+                                post_login_init(t_user.get('email'), t_user.get('name'))
+                                st.rerun()
 
-    if not client:
-        st.error("無法連線資料庫，請稍後再試")
-        return
+            st.markdown("---")
+            
+            # 【修改】加入 "📊 CRM 商機總覽"
+            pages = ["📝 OGSM日報系統", "💰 牌價表查詢系統", "📊 OGSM日報總覽", "📊 CRM 商機總覽", "🔑 修改密碼", "👋 登出系統"]
+            sel = st.radio("功能", pages, key="page_radio", label_visibility="collapsed")
+            
+            st.markdown("---")
+            try:
+                file_timestamp = os.path.getmtime(__file__)
+                tw_time = datetime.fromtimestamp(file_timestamp, timezone(timedelta(hours=8)))
+                last_updated_str = tw_time.strftime('%Y-%m-%d %H:%M')
+                st.caption(f"檔案版本: {last_updated_str}")
+            except:
+                st.caption("Ver: Latest")
+                
+            boot_time = get_system_boot_time()
+            st.caption(f"系統啟動: {boot_time}")
 
-    if sel == "📝 OGSM日報系統": 
-        daily_report.show(client, REPORT_DB_NAME, st.session_state.user_email, st.session_state.real_name)
-    elif sel == "💰 牌價表查詢系統": 
-        price_query.show(client, PRICE_DB_NAME, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
-    elif sel == "📊 OGSM日報總覽": 
-        report_overview.show(client, REPORT_DB_NAME, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
-    # 【修改】加入 CRM 總覽頁面邏輯
-    elif sel == "📊 CRM 商機總覽":
-        crm_overview.show(client, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
-    elif sel == "🔑 修改密碼":
-        st.subheader("修改密碼")
-        p1 = st.text_input("新密碼 (至少 8 位，含英數)", type="password", max_chars=50)
-        p2 = st.text_input("確認新密碼", type="password", max_chars=50)
-        if st.button("確認", use_container_width=True):
-            is_strong, str_msg = check_password_strength(p1)
-            if not p1 or not p2: st.error("請輸入完整資訊")
-            elif not is_strong: st.error(f"❌ {str_msg}")
-            elif p1 != p2: st.error("兩次密碼輸入不一致")
-            else:
-                if change_password(st.session_state.user_email, p1):
-                    st.success("✅ 密碼已修改，請重新登入")
-                    time.sleep(1)
-                    st.session_state.logged_in = False
-                    st.rerun()
-                else: st.error("修改失敗，請聯繫管理員")
+        if sel == "👋 登出系統":
+            write_log("登出系統", st.session_state.user_email)
+            write_session_log(st.session_state.user_email, st.session_state.real_name, action="LOGOUT")
+            st.session_state.logged_in = False
+            st.rerun()
+
+        if not client:
+            st.error("無法連線資料庫，請稍後再試")
+            return
+
+        if sel == "📝 OGSM日報系統": 
+            daily_report.show(client, REPORT_DB_NAME, st.session_state.user_email, st.session_state.real_name)
+        elif sel == "💰 牌價表查詢系統": 
+            price_query.show(client, PRICE_DB_NAME, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
+        elif sel == "📊 OGSM日報總覽": 
+            report_overview.show(client, REPORT_DB_NAME, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
+        # 【修改】加入 CRM 總覽頁面邏輯
+        elif sel == "📊 CRM 商機總覽":
+            crm_overview.show(client, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
+        elif sel == "🔑 修改密碼":
+            st.subheader("修改密碼")
+            p1 = st.text_input("新密碼 (至少 8 位，含英數)", type="password", max_chars=50)
+            p2 = st.text_input("確認新密碼", type="password", max_chars=50)
+            if st.button("確認", use_container_width=True):
+                is_strong, str_msg = check_password_strength(p1)
+                if not p1 or not p2: st.error("請輸入完整資訊")
+                elif not is_strong: st.error(f"❌ {str_msg}")
+                elif p1 != p2: st.error("兩次密碼輸入不一致")
+                else:
+                    if change_password(st.session_state.user_email, p1):
+                        st.success("✅ 密碼已修改，請重新登入")
+                        time.sleep(1)
+                        st.session_state.logged_in = False
+                        st.rerun()
+                    else: st.error("修改失敗，請聯繫管理員")
+    
+    except Exception as e:
+        # 捕捉所有未預期的錯誤，防止 traceback 洩漏
+        # 1. 記錄詳細錯誤到 Log (供開發者排查)
+        error_msg = traceback.format_exc()
+        logging.error(f"SYSTEM CRITICAL ERROR: {error_msg}")
+        
+        # 2. 顯示友善錯誤訊息給使用者
+        st.error("🚧 系統暫時忙碌中，請稍後再試。")
+        with st.expander("查看錯誤代碼 (僅供管理員參考)"):
+            st.caption(str(e)) # 僅顯示簡短錯誤訊息，不顯示堆疊追蹤
 
 if __name__ == "__main__":
     main()
