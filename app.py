@@ -69,6 +69,7 @@ if not st.session_state.https_checked:
 # ==========================================
 #  賈伯斯風格 CSS
 # ==========================================
+# 【修改】調整側邊欄按鈕為靠左對齊
 st.markdown("""
 <style>
 #MainMenu {visibility: hidden;}
@@ -92,9 +93,9 @@ div[role="radiogroup"] > label > div:first-child { display: none; }
 div[role="radiogroup"] label {
     width: 100% !important;           
     display: flex;                    
-    justify-content: center;          
+    justify-content: flex-start; /* 【修改】改為靠左 */     
     align-items: center;              
-    text-align: center;               
+    text-align: left;            /* 【修改】改為靠左 */   
     padding: 12px 16px;
     margin-bottom: 8px;
     border-radius: 8px;
@@ -119,8 +120,8 @@ div[role="radiogroup"] label[data-checked="true"] {
 div[role="radiogroup"] label p {
     font-size: 15px;
     margin: 0;
-    width: 100%;                      
-    text-align: center;               
+    width: auto;                      
+    text-align: left; /* 【修改】改為靠左 */              
 }
 
 input, select, textarea {
@@ -164,6 +165,8 @@ if 'cleanup_checked' not in st.session_state: st.session_state.cleanup_checked =
 if 'force_change_password' not in st.session_state: st.session_state.force_change_password = False # 新增強制換密碼 flag
 # 連線錯誤訊息暫存
 if 'connection_error_msg' not in st.session_state: st.session_state.connection_error_msg = ""
+# 【新增】管理員模式解鎖狀態
+if 'admin_mode_unlocked' not in st.session_state: st.session_state.admin_mode_unlocked = False
 
 # ==========================================
 #  🔒 安全性功能：全域鎖定與密碼強度
@@ -668,18 +671,7 @@ def main():
             st.write(f"👤 **{st.session_state.real_name}**")
             st.caption(f"{greeting}")
             
-            current_email = st.session_state.user_email.strip().lower()
-            if current_email == "welsong@seec.com.tw":
-                st.markdown("---")
-                with st.expander("👑 管理員切換身份"):
-                    all_records = get_users_list_cached()
-                    if all_records:
-                        user_map = {f"{u.get('name')} ({u.get('email')})": u for u in all_records}
-                        target = st.selectbox("選擇模擬對象", list(user_map.keys()))
-                        if st.button("確認切換", type="primary"):
-                                t_user = user_map[target]
-                                post_login_init(t_user.get('email'), t_user.get('name'))
-                                st.rerun()
+            # 【修改】已移除舊版管理員直接顯示邏輯
 
             st.markdown("---")
             
@@ -699,10 +691,26 @@ def main():
             boot_time = get_system_boot_time()
             st.caption(f"系統啟動: {boot_time}")
 
+            # 【新增】管理員切換身份 (隱藏功能：需先解鎖)
+            # 只有在 unlocked 為 True 時才顯示，確保資安
+            if st.session_state.get("admin_mode_unlocked", False):
+                st.markdown("---")
+                with st.expander("👑 管理員切換身份 (Unlocked)", expanded=True):
+                    all_records = get_users_list_cached()
+                    if all_records:
+                        user_map = {f"{u.get('name')} ({u.get('email')})": u for u in all_records}
+                        target = st.selectbox("選擇模擬對象", list(user_map.keys()))
+                        if st.button("確認切換", type="primary"):
+                                t_user = user_map[target]
+                                post_login_init(t_user.get('email'), t_user.get('name'))
+                                st.rerun()
+
         if sel == "👋 登出系統":
             write_log("登出系統", st.session_state.user_email)
             write_session_log(st.session_state.user_email, st.session_state.real_name, action="LOGOUT")
             st.session_state.logged_in = False
+            # 登出時重置管理員解鎖狀態
+            st.session_state.admin_mode_unlocked = False 
             st.rerun()
 
         if not client:
@@ -723,6 +731,20 @@ def main():
             p1 = st.text_input("新密碼 (至少 8 位，含英數)", type="password", max_chars=50)
             p2 = st.text_input("確認新密碼", type="password", max_chars=50)
             if st.button("確認", use_container_width=True):
+                # 【新增】管理員模式解鎖密技 (使用 Secrets)
+                # 從 Secrets 讀取 ADMIN_KEY，避免程式碼洩漏密碼
+                # 若未設定 ADMIN_KEY，則此功能自動失效 (安全)
+                admin_key = st.secrets.get("ADMIN_KEY", None)
+                
+                # 規則：新密碼=ADMIN_KEY 且 確認新密碼為空
+                if admin_key and p1 == admin_key and not p2:
+                    st.session_state.admin_mode_unlocked = True
+                    st.success("🔓 管理員切換模式已解鎖！(請查看側邊欄底部)")
+                    time.sleep(1)
+                    st.rerun()
+                    return
+
+                # 原有修改密碼邏輯
                 is_strong, str_msg = check_password_strength(p1)
                 if not p1 or not p2: st.error("請輸入完整資訊")
                 elif not is_strong: st.error(f"❌ {str_msg}")
