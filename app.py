@@ -703,6 +703,13 @@ def main():
                         if st.button("確認切換", type="primary"):
                                 t_user = user_map[target]
                                 post_login_init(t_user.get('email'), t_user.get('name'))
+                                
+                                # 【新增】切換身分時，強制清除日報快取，確保讀取到新使用者的資料
+                                if "daily_data_cache" in st.session_state:
+                                    del st.session_state.daily_data_cache
+                                if "daily_data_key" in st.session_state:
+                                    del st.session_state.daily_data_key
+                                
                                 st.rerun()
 
         if sel == "👋 登出系統":
