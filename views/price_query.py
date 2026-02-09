@@ -211,7 +211,6 @@ def show_calculator_dialog(spec, desc, base_price):
         <div style="font-size:2em; font-weight:bold;">${final_p:,.0f}</div>
     </div>
     """, unsafe_allow_html=True)
-
 # ==========================================
 #  4. 主頁面顯示
 # ==========================================
@@ -255,13 +254,35 @@ def show(client, db_name, user_email, real_name, is_manager):
     </style>
     """, unsafe_allow_html=True)
 
+    # === 【新增】搜尋記憶功能實作 ===
+    # 1. 初始化永久儲存變數 (若不存在)
+    if "saved_price_query" not in st.session_state:
+        st.session_state.saved_price_query = ""
+
+    # 2. 定義 callback 更新變數 (當輸入框變動時觸發)
+    def update_search_memory():
+        st.session_state.saved_price_query = st.session_state.price_search_box
+
     # === 搜尋區塊 ===
     with st.container(border=True):
         col1, col2 = st.columns([4, 1])
         with col1:
-            query = st.text_input("🔍 關鍵字搜尋", placeholder="例: SDE, 55KW...", max_chars=MAX_SEARCH_LENGTH, key="price_search_box", label_visibility="collapsed")
+            # 3. 綁定 value=記憶變數, on_change=更新函式
+            query = st.text_input(
+                "🔍 關鍵字搜尋", 
+                value=st.session_state.saved_price_query, # 讀取記憶
+                placeholder="例: SDE, 55KW...", 
+                max_chars=MAX_SEARCH_LENGTH, 
+                key="price_search_box", 
+                label_visibility="collapsed",
+                on_change=update_search_memory # 輸入變動時立即存檔
+            )
         with col2:
             search_btn = st.button("搜尋", use_container_width=True, type="primary")
+
+    # 手動更新 (確保按按鈕時也能同步記憶)
+    if search_btn:
+        st.session_state.saved_price_query = query
 
     if search_btn or query:
         query = sanitize_search_query(query)
@@ -279,8 +300,9 @@ def show(client, db_name, user_email, real_name, is_manager):
             mask = df.apply(lambda row: row.astype(str).str.contains(query, case=False, regex=False).any(), axis=1)
             result_df = df[mask]
             
-            # 記錄 Log
-            write_search_log(client, db_name, user_email, query, len(result_df))
+            # 【修改】移除此處的 write_search_log，改至下方「試算」按鈕觸發
+            # write_search_log(...) <--- 已移除
+            
         except Exception as e:
             st.error("搜尋發生錯誤")
             logging.error(f"Search error: {e}")
@@ -311,7 +333,7 @@ def show(client, db_name, user_email, real_name, is_manager):
                     if val: desc_parts.append(val)
                 product_desc = " | ".join(desc_parts)
 
-                # 【資安強化】XSS 防護：在渲染 HTML 前進行 Escape
+                # 【資安強化】XSS 防護
                 product_name_esc = html.escape(product_name)
                 product_desc_esc = html.escape(product_desc)
 
@@ -341,7 +363,6 @@ def show(client, db_name, user_email, real_name, is_manager):
                 with st.container():
                     c1, c2 = st.columns([3, 1])
                     with c1:
-                        # 使用 escape 後的變數進行渲染，確保安全
                         st.markdown(f"""
                         <div class="card-title">{product_name_esc}</div>
                         <div class="card-desc">{product_desc_esc}</div>
@@ -351,7 +372,9 @@ def show(client, db_name, user_email, real_name, is_manager):
                     with c2:
                         st.write("")
                         if base_price > 0:
+                            # 【修改】Log 紀錄移至此處 (只有點擊試算才紀錄)
                             if st.button("試算", key=f"btn_{idx}", use_container_width=True):
+                                # 這裡才會寫入 Google Sheet
                                 write_search_log(client, db_name, user_email, product_name, "試算選取")
                                 show_calculator_dialog(product_name_esc, product_desc_esc, base_price)
                         else:
