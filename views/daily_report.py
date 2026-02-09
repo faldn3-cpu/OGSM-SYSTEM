@@ -187,8 +187,10 @@ def get_or_create_user_sheet(client, db_name, real_name):
 def load_data_by_range_cached(ws, start_date, end_date):
     """
     快取版讀取函式
+    【修正】將 ws.title (使用者名稱) 加入 Cache Key，避免切換身分時資料未更新
     """
-    cache_key = f"data_{start_date}_{end_date}"
+    # 修正重點：Cache Key 加入 ws.title
+    cache_key = f"data_{ws.title}_{start_date}_{end_date}"
     
     if "daily_data_cache" not in st.session_state:
         st.session_state.daily_data_cache = None
