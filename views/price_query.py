@@ -22,7 +22,10 @@ def get_tw_time():
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 
 def write_search_log(client, db_name, user_email, query, result_count):
-    """記錄搜尋行為 (BI 商業分析用) - 採非阻斷式設計"""
+    """
+    記錄搜尋行為 (BI 商業分析用) - 採非阻斷式設計
+    user_email: 這裡接收的可能是 "welsong (模擬: user_a)" 這樣的複合字串
+    """
     try:
         # 如果是離線狀態或 client 為 None，直接跳過記錄
         if not client: return
