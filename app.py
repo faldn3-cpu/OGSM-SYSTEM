@@ -14,9 +14,9 @@ import extra_streamlit_components as stx
 import logging
 from functools import wraps
 import traceback 
-import re # 新增 re 模組用於正則表達式
+import re 
 
-# 匯入頁面模組 (已新增 crm_overview)
+# 匯入頁面模組
 from views import price_query, daily_report, report_overview, crm_overview
 
 # ==========================================
@@ -40,18 +40,12 @@ st.set_page_config(
 
 # ==========================================
 #  🛡️ 強力喚醒模式 (Hold the Door)
-#  說明：當偵測到 ?wake_up=true 時，刻意停留 30 秒
-#       確保 Streamlit 伺服器完成完整的啟動程序，不會秒睡。
 # ==========================================
 if "wake_up" in st.query_params:
-    print("⏰ Wake up signal received. Holding connection...") # 寫入後台 Log
+    print("⏰ Wake up signal received. Holding connection...") 
     st.title("🤖 System is Waking Up...")
     st.write("Holding the door open for 30 seconds...")
-    
-    # 關鍵：強制等待 30 秒，不讓 Python 程式結束
-    # 這會讓伺服器認為這是一個「有效的長連線」
     time.sleep(30)
-    
     st.write("Done. System is live.")
     st.stop()
 
@@ -67,9 +61,8 @@ if not st.session_state.https_checked:
     st.session_state.https_checked = True
 
 # ==========================================
-#  賈伯斯風格 CSS
+#  CSS 樣式設定
 # ==========================================
-# 【修改】調整側邊欄按鈕為靠左對齊
 st.markdown("""
 <style>
 #MainMenu {visibility: hidden;}
@@ -93,9 +86,9 @@ div[role="radiogroup"] > label > div:first-child { display: none; }
 div[role="radiogroup"] label {
     width: 100% !important;           
     display: flex;                    
-    justify-content: flex-start; /* 【修改】改為靠左 */     
+    justify-content: flex-start;
     align-items: center;              
-    text-align: left;            /* 【修改】改為靠左 */   
+    text-align: left;
     padding: 12px 16px;
     margin-bottom: 8px;
     border-radius: 8px;
@@ -121,7 +114,7 @@ div[role="radiogroup"] label p {
     font-size: 15px;
     margin: 0;
     width: auto;                      
-    text-align: left; /* 【修改】改為靠左 */              
+    text-align: left;
 }
 
 input, select, textarea {
@@ -154,6 +147,7 @@ except Exception as e:
 # === Session State 初始化 ===
 if 'logged_in' not in st.session_state: st.session_state.logged_in = False
 if 'user_email' not in st.session_state: st.session_state.user_email = ""
+if 'real_user_email' not in st.session_state: st.session_state.real_user_email = "" # 【新增】真實身分變數
 if 'real_name' not in st.session_state: st.session_state.real_name = ""
 if 'login_attempts' not in st.session_state: st.session_state.login_attempts = 0
 if 'page_radio' not in st.session_state: st.session_state.page_radio = "📝 OGSM日報系統"
@@ -162,16 +156,13 @@ if 'reset_stage' not in st.session_state: st.session_state.reset_stage = 0
 if 'reset_otp' not in st.session_state: st.session_state.reset_otp = ""
 if 'reset_target_email' not in st.session_state: st.session_state.reset_target_email = ""
 if 'cleanup_checked' not in st.session_state: st.session_state.cleanup_checked = False
-if 'force_change_password' not in st.session_state: st.session_state.force_change_password = False # 新增強制換密碼 flag
-# 連線錯誤訊息暫存
+if 'force_change_password' not in st.session_state: st.session_state.force_change_password = False 
 if 'connection_error_msg' not in st.session_state: st.session_state.connection_error_msg = ""
-# 【新增】管理員模式解鎖狀態
 if 'admin_mode_unlocked' not in st.session_state: st.session_state.admin_mode_unlocked = False
 
 # ==========================================
-#  🔒 安全性功能：全域鎖定與密碼強度
+#  🔒 安全性功能
 # ==========================================
-# 使用 cache_resource 確保變數跨 Session 存在，實現記憶體全域變數效果
 @st.cache_resource
 def get_global_login_tracker():
     return {}
@@ -179,25 +170,20 @@ def get_global_login_tracker():
 LOGIN_ATTEMPTS_TRACKER = get_global_login_tracker()
 
 def check_is_locked(email):
-    """檢查帳號是否被鎖定"""
     if not email: return False, ""
     record = LOGIN_ATTEMPTS_TRACKER.get(email)
     if not record: return False, ""
-    
-    # 規則：錯誤 3 次，鎖定 5 分鐘 (300秒)
     if record['count'] >= 3:
         elapsed = time.time() - record['last_time']
         if elapsed < 300:
             remaining = int(300 - elapsed)
             return True, f"帳號已鎖定，請於 {remaining} 秒後再試"
         else:
-            # 時間到，解鎖 (重置計數)
             LOGIN_ATTEMPTS_TRACKER[email] = {'count': 0, 'last_time': time.time()}
             return False, ""
     return False, ""
 
 def record_login_fail(email):
-    """記錄登入失敗"""
     if not email: return
     now = time.time()
     if email not in LOGIN_ATTEMPTS_TRACKER:
@@ -207,25 +193,16 @@ def record_login_fail(email):
         LOGIN_ATTEMPTS_TRACKER[email]['last_time'] = now
 
 def reset_login_attempts(email):
-    """登入成功，重置計數"""
     if email in LOGIN_ATTEMPTS_TRACKER:
         del LOGIN_ATTEMPTS_TRACKER[email]
 
 def check_password_strength(password):
-    """
-    強密碼策略：
-    1. 至少 8 碼
-    2. 包含英文與數字
-    """
     if len(password) < 8:
         return False, "密碼長度不足 (至少 8 碼)"
     if not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
         return False, "密碼需包含英文與數字"
     return True, "OK"
 
-# ==========================================
-#  🔒 安全性功能：速率限制器
-# ==========================================
 user_rate_limits = {}
 
 def rate_limit(max_calls=10, period=60):
@@ -261,7 +238,6 @@ def get_tw_time():
     tw_tz = timezone(timedelta(hours=8))
     return datetime.now(tw_tz).strftime("%Y-%m-%d %H:%M:%S")
 
-# 【新增】系統啟動時間 (使用 cache_resource，只有在系統重啟時才會重新執行)
 @st.cache_resource
 def get_system_boot_time():
     return get_tw_time()
@@ -270,7 +246,6 @@ def get_client():
     scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     error_log = []
 
-    # 方式 1: 檢查本地檔案
     if os.path.exists('service_account.json'):
         try:
             creds = ServiceAccountCredentials.from_json_keyfile_name('service_account.json', scope)
@@ -280,7 +255,6 @@ def get_client():
     else:
         error_log.append("Local 'service_account.json' not found.")
 
-    # 方式 2: 檢查 Streamlit Secrets
     try:
         if "gcp_service_account" in st.secrets:
             try:
@@ -297,20 +271,37 @@ def get_client():
     except Exception as e:
         error_log.append(f"General Secrets error: {str(e)}\n{traceback.format_exc()}")
 
-    # 如果都失敗，記錄錯誤訊息
     st.session_state.connection_error_msg = " || ".join(error_log)
     return None
 
+# 【修改】write_log 支援雙重身分紀錄
 def write_log(action, user_email, note=""):
     client = get_client()
     if not client: return
+    
+    # === 雙重身分判斷邏輯 ===
+    # 預設使用傳入的 user_email (這確保了 login_failed 等未登入狀態也能紀錄)
+    final_user_str = user_email
+    
+    # 只有當 Session 內有資料，且是針對「當前登入者」的操作時，才進行複合字串處理
+    try:
+        if 'real_user_email' in st.session_state and 'user_email' in st.session_state:
+            real = st.session_state.real_user_email
+            curr = st.session_state.user_email
+            
+            # 如果「真實身分」與「當前身分」不同，且目前要紀錄的對象就是「當前身分」
+            if real and curr and real != curr and user_email == curr:
+                final_user_str = f"{real} (模擬: {curr})"
+    except:
+        pass # 若 Session 讀取有誤，則維持原樣
+        
     try:
         sh = client.open(PRICE_DB_NAME)
         try: ws = sh.worksheet("Logs")
         except: 
             ws = sh.add_worksheet(title="Logs", rows=1000, cols=4)
             ws.append_row(["時間", "使用者", "動作", "備註"])
-        ws.append_row([get_tw_time(), user_email, action, note])
+        ws.append_row([get_tw_time(), final_user_str, action, note])
     except Exception: pass
 
 def write_session_log(email, name, action="LOGIN"):
@@ -417,7 +408,6 @@ def hash_password(plain_text):
 
 @st.cache_data(ttl=600)
 def get_users_list_cached():
-    """快取讀取 Users 表單，避免每次重新渲染時都讀取"""
     client = get_client()
     if not client: return []
     try:
@@ -442,9 +432,7 @@ def send_otp_email(to_email, otp_code):
         return True, "已發送"
     except Exception as e: return False, str(e)
 
-# 【強化】登入函式：加入延遲、模糊錯誤與全域鎖定
 def login(email, password):
-    # 1. 檢查帳號鎖定狀態
     is_locked, lock_msg = check_is_locked(email)
     if is_locked:
         return False, lock_msg
@@ -470,17 +458,13 @@ def login(email, password):
                     break
         
         if login_success:
-            # 登入成功，清除錯誤計數
             reset_login_attempts(email)
             return True, user_name
         else:
-            # 登入失敗 (密碼錯誤或帳號不存在)
             record_login_fail(email)
-            write_log("LOGIN_FAILED", email, "帳號或密碼錯誤") # Log 內部可保持詳細，但前端模糊
-            
-            # 安全延遲 2 秒，防範掃描
+            write_log("LOGIN_FAILED", email, "帳號或密碼錯誤") 
             time.sleep(2)
-            return False, "帳號或密碼錯誤" # 模糊錯誤訊息
+            return False, "帳號或密碼錯誤"
 
     except Exception as e:
         return False, f"登入驗證失敗: {str(e)}"
@@ -534,12 +518,9 @@ def admin_switch_callback(target_email, target_name):
 
 # === 主程式 ===
 def main():
-    # 【資安強化】錯誤遮蔽 (Error Masking)
-    # 使用 try-except 包覆主程式，避免 Traceback 直接顯示在前端
     try:
         cookie_manager = stx.CookieManager()
         
-        # 嘗試連線
         client = get_client()
         if client:
             auto_cleanup_logs(client)
@@ -551,8 +532,6 @@ def main():
                 st.header("🔒 士林電機FA 業務系統")
                 
                 if st.session_state.login_attempts >= 3:
-                    # 注意：這裡的 login_attempts 是 session 級別的簡易計數
-                    # 真正的鎖定邏輯在 login() 函式內的全域變數處理
                     pass
 
                 tab1, tab2 = st.tabs(["會員登入", "忘記密碼"])
@@ -580,9 +559,11 @@ def main():
                                     
                                     time.sleep(1.5)
 
+                                    # 【新增】記錄真實登入身分 (用於切換身分時的稽核)
+                                    st.session_state.real_user_email = email
+
                                     post_login_init(email, result)
                                     
-                                    # 【舊密碼攔截】登入成功後，檢查輸入的明文密碼是否符合強密碼規則
                                     is_strong, str_msg = check_password_strength(pwd)
                                     if not is_strong:
                                         st.session_state.force_change_password = True
@@ -620,7 +601,6 @@ def main():
                         otp_in = st.text_input("輸入驗證碼", max_chars=6)
                         new_pw = st.text_input("新密碼 (至少 8 位，含英數)", type="password", max_chars=50)
                         if st.button("確認重置", use_container_width=True):
-                            # 強密碼檢查
                             is_strong, str_msg = check_password_strength(new_pw)
                             if not is_strong:
                                 st.error(f"密碼強度不足：{str_msg}")
@@ -642,7 +622,6 @@ def main():
                      with st.expander("🔍 點擊查看技術錯誤詳情 (供管理員除錯)", expanded=True):
                         st.code(st.session_state.connection_error_msg, language="text")
             
-            # 顯示系統時間資訊，協助判斷是否重啟
             st.markdown("---")
             c_time = get_tw_time()
             b_time = get_system_boot_time()
@@ -650,7 +629,6 @@ def main():
             
             return
 
-        # === 強制修改密碼攔截流程 ===
         if st.session_state.get("force_change_password", False):
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
@@ -673,21 +651,15 @@ def main():
                                 st.rerun()
                             else:
                                 st.error("修改失敗，請聯繫管理員")
-            
-            # 攔截狀態下，不渲染側邊欄與其他內容
             return
 
-        # === 側邊欄 ===
         with st.sidebar:
             greeting = get_greeting()
             st.write(f"👤 **{st.session_state.real_name}**")
             st.caption(f"{greeting}")
             
-            # 【修改】已移除舊版管理員直接顯示邏輯
-
             st.markdown("---")
             
-            # 【修改】加入 "📊 CRM 商機總覽"
             pages = ["📝 OGSM日報系統", "💰 牌價表查詢系統", "📊 OGSM日報總覽", "📊 CRM 商機總覽", "🔑 修改密碼", "👋 登出系統"]
             sel = st.radio("功能", pages, key="page_radio", label_visibility="collapsed")
             
@@ -704,7 +676,6 @@ def main():
             st.caption(f"系統啟動: {boot_time}")
 
             # 【新增】管理員切換身份 (隱藏功能：需先解鎖)
-            # 只有在 unlocked 為 True 時才顯示，確保資安
             if st.session_state.get("admin_mode_unlocked", False):
                 st.markdown("---")
                 with st.expander("👑 管理員切換身份 (Unlocked)", expanded=True):
@@ -713,14 +684,14 @@ def main():
                         user_map = {f"{u.get('name')} ({u.get('email')})": u for u in all_records}
                         target = st.selectbox("選擇模擬對象", list(user_map.keys()))
                         t_user = user_map[target]
-                        # 【修正】使用 on_click 回調，傳入參數，避免渲染後修改 State 的錯誤
                         st.button("確認切換", type="primary", on_click=admin_switch_callback, args=(t_user.get('email'), t_user.get('name')))
 
         if sel == "👋 登出系統":
             write_log("登出系統", st.session_state.user_email)
             write_session_log(st.session_state.user_email, st.session_state.real_name, action="LOGOUT")
             st.session_state.logged_in = False
-            # 登出時重置管理員解鎖狀態
+            # 登出時重置真實身分與解鎖狀態
+            st.session_state.real_user_email = "" 
             st.session_state.admin_mode_unlocked = False 
             st.rerun()
 
@@ -731,10 +702,15 @@ def main():
         if sel == "📝 OGSM日報系統": 
             daily_report.show(client, REPORT_DB_NAME, st.session_state.user_email, st.session_state.real_name)
         elif sel == "💰 牌價表查詢系統": 
-            price_query.show(client, PRICE_DB_NAME, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
+            # 【新增】組合稽核身分字串，傳入 price_query
+            audit_identity = st.session_state.user_email
+            if st.session_state.get("real_user_email") and st.session_state.real_user_email != st.session_state.user_email:
+                audit_identity = f"{st.session_state.real_user_email} (模擬: {st.session_state.user_email})"
+            
+            # 將 audit_identity 傳入，確保 SearchLogs 紀錄雙重身分
+            price_query.show(client, PRICE_DB_NAME, audit_identity, st.session_state.real_name, st.session_state.role=="manager")
         elif sel == "📊 OGSM日報總覽": 
             report_overview.show(client, REPORT_DB_NAME, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
-        # 【修改】加入 CRM 總覽頁面邏輯
         elif sel == "📊 CRM 商機總覽":
             crm_overview.show(client, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
         elif sel == "🔑 修改密碼":
@@ -742,12 +718,8 @@ def main():
             p1 = st.text_input("新密碼 (至少 8 位，含英數)", type="password", max_chars=50)
             p2 = st.text_input("確認新密碼", type="password", max_chars=50)
             if st.button("確認", use_container_width=True):
-                # 【新增】管理員模式解鎖密技 (使用 Secrets)
-                # 從 Secrets 讀取 ADMIN_KEY，避免程式碼洩漏密碼
-                # 若未設定 ADMIN_KEY，則此功能自動失效 (安全)
                 admin_key = st.secrets.get("ADMIN_KEY", None)
                 
-                # 規則：新密碼=ADMIN_KEY 且 確認新密碼為空
                 if admin_key and p1 == admin_key and not p2:
                     st.session_state.admin_mode_unlocked = True
                     st.success("🔓 管理員切換模式已解鎖！(請查看側邊欄底部)")
@@ -755,7 +727,6 @@ def main():
                     st.rerun()
                     return
 
-                # 原有修改密碼邏輯
                 is_strong, str_msg = check_password_strength(p1)
                 if not p1 or not p2: st.error("請輸入完整資訊")
                 elif not is_strong: st.error(f"❌ {str_msg}")
@@ -769,15 +740,12 @@ def main():
                     else: st.error("修改失敗，請聯繫管理員")
     
     except Exception as e:
-        # 捕捉所有未預期的錯誤，防止 traceback 洩漏
-        # 1. 記錄詳細錯誤到 Log (供開發者排查)
         error_msg = traceback.format_exc()
         logging.error(f"SYSTEM CRITICAL ERROR: {error_msg}")
         
-        # 2. 顯示友善錯誤訊息給使用者
         st.error("🚧 系統暫時忙碌中，請稍後再試。")
         with st.expander("查看錯誤代碼 (僅供管理員參考)"):
-            st.caption(str(e)) # 僅顯示簡短錯誤訊息，不顯示堆疊追蹤
+            st.caption(str(e))
 
 if __name__ == "__main__":
     main()
