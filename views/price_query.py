@@ -40,12 +40,21 @@ def write_search_log(client, db_name, user_email, query, result_count):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def fetch_last_update_date(db_name, _client):
-    """讀取 Users 頁面的 D1 儲存格作為更新日期"""
+    """
+    【修改】讀取 PriceData 頁面的 G2 儲存格作為更新日期
+    """
     try:
         if not _client: return "離線模式"
         sh = _client.open(db_name)
-        ws = sh.worksheet("Users")
-        val = ws.acell('D1').value
+        
+        # 嘗試讀取 PriceData 分頁
+        try:
+            ws = sh.worksheet("PriceData")
+        except gspread.WorksheetNotFound:
+            logging.warning("Worksheet 'PriceData' not found.")
+            return "無法取得(分頁遺失)"
+            
+        val = ws.acell('G2').value
         return str(val) if val else "未知"
     except Exception as e:
         logging.warning(f"Failed to fetch update date: {e}")
