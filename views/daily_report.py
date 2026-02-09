@@ -654,6 +654,7 @@ def show(client, db_name, user_email, real_name):
             selected_rows = edited_df[edited_df["選取"] == True].copy()
             if not selected_rows.empty:
                 selected_rows = selected_rows.sort_values(by="日期")
+                # 【修改】純文字標題，不帶 Emoji
                 msg_lines = [f"【{real_name} 業務匯報】"]
                 unique_dates = selected_rows["日期"].unique()
                 
@@ -670,7 +671,8 @@ def show(client, db_name, user_email, real_name):
                             header_suffix = " (明日預計行程)"
                     except: pass
 
-                    msg_lines.append(f"\n📅 {d_str}{header_suffix}")
+                    # 【修改】日期行不帶 Emoji
+                    msg_lines.append(f"\n{d_str}{header_suffix}")
                     msg_lines.append("--------------")
                     
                     for idx, row in day_rows.iterrows():
@@ -681,10 +683,11 @@ def show(client, db_name, user_email, real_name):
                         
                         if not c_name and not job and not result: continue
 
-                        msg_lines.append(f"🏢 {c_name} {cat}")
-                        if job: msg_lines.append(f"📋 計畫：{job}")
-                        if result: msg_lines.append(f"✅ 實際：{result}")
-                        msg_lines.append("---")
+                        # 【修改】內容格式：純文字標籤
+                        msg_lines.append(f"客戶：{c_name} ，客戶分類：{cat}")
+                        if job: msg_lines.append(f"計畫：{job}")
+                        if result: msg_lines.append(f"實際：{result}")
+                        msg_lines.append("--------------")
                 
                 final_msg = "\n".join(msg_lines)
 
