@@ -527,9 +527,8 @@ def show(client, db_name, user_email, real_name):
                 current_df = current_df.drop(columns=[col])
         
         # 插入 UI 欄位
-        current_df.insert(0, "選取", False) # 用於 LINE 日報 / CRM 同步
-        # [移除] 移除舊版「同步」欄位
-        # current_df["同步"] = False 
+        current_df.insert(0, "選取", False) # 用於 LINE 日報
+        current_df["同步"] = False          # 用於觸發 CRM 同步 (放在最後)
         
         # 【修正】預設勾選：今天 + 下一個工作日 (跳過週末與假日)
         try:
@@ -565,24 +564,34 @@ def show(client, db_name, user_email, real_name):
                 st.session_state.dr_mode = "add"
                 st.rerun()
 
-        # 表格顯示
-        # 【修正】設定 height=600 以顯示更多列數
-        # 【修正】移除 "同步" 欄位設定，優化寬度
+        # 【新增】表格操作說明 (Expander)
+        with st.expander("ℹ️ 表格操作說明 (點擊展開)"):
+            st.markdown("""
+            - **新增資料**：點擊表格左下角的 `+` 號，或使用上方「跳至新增工作」按鈕。
+            - **刪除資料**：選取該行左側的選取框，按下鍵盤 `Delete` 鍵。
+            - **換行/確認**：輸入完畢後按下 `Enter` 鍵可確認並跳至下一行。
+            - **自動同步**：勾選「同步」欄位會**自動儲存**並跳轉至 CRM 表單。
+            """)
+
+        # 表格顯示 (加入 Sync 觸發偵測)
+        # 【修正】設定 height=400 以顯示更多列數
+        # 【修正】column_config 增加具體寬度設定
         edited_df = st.data_editor(
             current_df,
             num_rows="dynamic",
             hide_index=True,
             use_container_width=True,
-            height=600, 
+            height=400, 
             column_config={
-                "選取": st.column_config.CheckboxColumn("選取", width="small", help="用於產生 LINE 日報 與 同步至 CRM"),
-                "日期": st.column_config.DateColumn("日期", format="YYYY-MM-DD", width="small"),
+                "選取": st.column_config.CheckboxColumn("LINE日報", width=80, help="勾選以加入下方 LINE 日報文字"),
+                "同步": st.column_config.CheckboxColumn("同步", width=60, help="勾選後自動儲存並跳轉至客戶關係表單"),
+                "日期": st.column_config.DateColumn("日期", format="YYYY-MM-DD", width=100),
                 "客戶名稱": st.column_config.TextColumn("客戶名稱", width=150),
-                "客戶分類": st.column_config.SelectboxColumn("客戶分類", width="medium", 
+                "客戶分類": st.column_config.SelectboxColumn("客戶分類", width=120, 
                     options=["(A) 直賣A級", "(B) 直賣B級", "(C) 直賣C級", "(D-A) 經銷A級", "(D-B) 經銷B級", "(D-C) 經銷C級", "(O) 其它"]),
                 "工作內容": st.column_config.TextColumn("工作內容", width="large"),
                 "實際行程": st.column_config.TextColumn("實際行程", width="large"),
-                "最後更新時間": st.column_config.TextColumn("更新時間", disabled=True, width="small")
+                "最後更新時間": st.column_config.TextColumn("更新時間", disabled=True, width=100)
             },
             key="data_editor_main"
         )
@@ -591,7 +600,7 @@ def show(client, db_name, user_email, real_name):
         if st.button("💾 儲存修改", type="secondary", use_container_width=True):
              with st.spinner("儲存變更中..."):
                 # 儲存前移除 UI 欄位
-                df_to_save = edited_df.drop(columns=["選取"], errors='ignore')
+                df_to_save = edited_df.drop(columns=["選取", "同步"], errors='ignore')
                 
                 # 驗證輸入
                 for col in ["客戶名稱", "工作內容", "實際行程"]:
@@ -607,14 +616,39 @@ def show(client, db_name, user_email, real_name):
                 else:
                     st.error(f"儲存失敗: {msg}")
 
+        # --- 偵測「同步」勾選動作 (自動儲存邏輯) ---
+        if "同步" in edited_df.columns:
+            sync_rows = edited_df[edited_df["同步"] == True]
+            if not sync_rows.empty:
+                # 抓取第一筆被勾選的資料
+                target_row = sync_rows.iloc[0]
+                
+                # 【新增】自動儲存邏輯 (因為使用者期望勾選即觸發)
+                with st.spinner("🔄 正在儲存並跳轉至 CRM 表單..."):
+                    df_to_save_auto = edited_df.drop(columns=["選取", "同步"], errors='ignore')
+                    # 同樣執行輸入清洗
+                    for col in ["客戶名稱", "工作內容", "實際行程"]:
+                        if col in df_to_save_auto.columns:
+                            df_to_save_auto[col] = df_to_save_auto[col].apply(lambda x: sanitize_input(x))
+                    
+                    success, msg = save_to_google_sheet(ws, all_df, df_to_save_auto, start_date, end_date)
+                    
+                    if success:
+                        st.session_state.dr_sync_data = target_row.to_dict() # 暫存資料
+                        st.session_state.dr_mode = "sync" # 切換模式
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error(f"自動儲存失敗，無法同步: {msg}")
+
         st.markdown("---")
 
-        # --- 2. 產生 LINE 日報文字 & CRM 同步按鈕 ---
-        c1, c2, c3 = st.columns([2, 1, 1])
+        # --- 2. 產生 LINE 日報文字 (含複製按鈕) ---
+        c1, c2 = st.columns([2, 1])
         with c1:
-            st.subheader("📤 LINE 日報 / CRM 同步")
+            st.subheader("📤 產生 LINE 日報文字")
         
-        # 準備 LINE 日報文字
+        # 準備文字
         final_msg = ""
         if "選取" in edited_df.columns:
             selected_rows = edited_df[edited_df["選取"] == True].copy()
@@ -627,6 +661,7 @@ def show(client, db_name, user_email, real_name):
                     d_str = str(d)
                     day_rows = selected_rows[selected_rows["日期"] == d]
                     
+                    # 【修正】標題邏輯：今日 vs 明日(預計)
                     header_suffix = ""
                     try:
                         if d == today: 
@@ -648,53 +683,21 @@ def show(client, db_name, user_email, real_name):
 
                         msg_lines.append(f"🏢 {c_name} {cat}")
                         if job: msg_lines.append(f"📋 計畫：{job}")
-                        if result: msg_lines.append(f"✅ 實績：{result}")
+                        if result: msg_lines.append(f"✅ 實際：{result}")
                         msg_lines.append("---")
                 
                 final_msg = "\n".join(msg_lines)
 
-        # 顯示按鈕群組
-        with c2:
-            # LINE 複製按鈕
-            if final_msg:
-                render_copy_button(final_msg)
-            else:
-                st.info("請勾選資料以產生內容")
-
-        with c3:
-            # 【新增】CRM 同步按鈕 (含自動儲存邏輯)
-            if st.button("🚀 同步至 CRM", use_container_width=True, type="primary"):
-                # 1. 執行自動儲存 (Auto-Save)
-                with st.spinner("正在儲存並準備同步..."):
-                    df_to_save = edited_df.drop(columns=["選取"], errors='ignore')
-                    # 驗證輸入
-                    for col in ["客戶名稱", "工作內容", "實際行程"]:
-                        if col in df_to_save.columns:
-                            df_to_save[col] = df_to_save[col].apply(lambda x: sanitize_input(x))
-                    
-                    save_success, save_msg = save_to_google_sheet(ws, all_df, df_to_save, start_date, end_date)
-                    
-                    if not save_success:
-                        st.error(f"自動儲存失敗，無法同步: {save_msg}")
-                    else:
-                        # 2. 檢查選取項目
-                        if "選取" in edited_df.columns:
-                            sync_target = edited_df[edited_df["選取"] == True]
-                            if sync_target.empty:
-                                st.warning("⚠️ 請勾選一筆資料進行同步")
-                            elif len(sync_target) > 1:
-                                st.warning("⚠️ CRM 同步一次僅限一筆，請勿多選。")
-                            else:
-                                # 成功鎖定一筆資料
-                                target_row = sync_target.iloc[0]
-                                st.session_state.dr_sync_data = target_row.to_dict()
-                                st.session_state.dr_mode = "sync"
-                                time.sleep(0.5)
-                                st.rerun()
-
-        # 顯示預覽文字
+        # 顯示複製按鈕 (放在標題旁或下方)
         if final_msg:
+            with c2:
+                # 呼叫 JS 複製按鈕
+                render_copy_button(final_msg)
+            
+            # 【調整】高度放大 2 倍 (200 -> 600)
             st.text_area("預覽內容 (若按鈕無效可手動複製)", value=final_msg, height=600)
+        else:
+            st.info("💡 請在上方表格勾選「LINE日報」欄位 (預設已勾選今天與下一個工作日)。")
 
     # ==========================================
     #  狀態 B: 新增工作模式 (簡潔表單)
@@ -802,13 +805,12 @@ def show(client, db_name, user_email, real_name):
 
                 col_a, col_b = st.columns(2)
                 with col_a:
-                    # 【修正】客戶所屬預設為填寫人 (比對名字)
-                    owner_idx = 0
+                    # 【修正】預設為填寫人 (若在清單中)
+                    default_owner_idx = 0
                     if real_name in CRM_OPT_OWNER:
-                        owner_idx = CRM_OPT_OWNER.index(real_name)
+                        default_owner_idx = CRM_OPT_OWNER.index(real_name)
                     
-                    f_owner = st.selectbox("客戶所屬 (偕同拜訪/擔當)", options=CRM_OPT_OWNER, index=owner_idx)
-                    
+                    f_owner = st.selectbox("客戶所屬 (偕同拜訪/擔當)", options=CRM_OPT_OWNER, index=default_owner_idx)
                     f_channel = st.selectbox("通路商", options=CRM_OPT_CHANNEL)
                     f_comp_channel = st.selectbox("競爭通路 (選填)", options=CRM_OPT_COMP_CHANNEL)
                     f_action = st.selectbox("行動方案", options=CRM_OPT_ACTION)
