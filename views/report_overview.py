@@ -179,16 +179,30 @@ def get_all_sales_names(ws_map):
 def show(client, db_name, user_email, real_name, is_manager):
     st.title("📊 日報總覽與匯出")
 
+    # === 0. 資料庫年份選擇 (歷史歸檔機制) ===
+    current_year = date.today().year
+    db_options = {
+        f"🟢 [當前] {current_year} 年度 (主庫)": db_name,
+        f"🗄️ [歷史] {current_year - 1} 年度": f"{db_name}_歷史庫_{current_year - 1}",
+        f"🗄️ [歷史] {current_year - 2} 年度": f"{db_name}_歷史庫_{current_year - 2}",
+        f"🗄️ [歷史] {current_year - 3} 年度": f"{db_name}_歷史庫_{current_year - 3}"
+    }
+    selected_db_label = st.selectbox("📂 選擇查詢庫 (年度)", options=list(db_options.keys()))
+    actual_db_name = db_options[selected_db_label]
+
     # === 連線資料庫 ===
     try:
-        with st.spinner("正在連線資料庫..."):
-            sh = get_spreadsheet_with_retry(client, db_name)
+        with st.spinner(f"正在連線資料庫 ({actual_db_name})..."):
+            sh = get_spreadsheet_with_retry(client, actual_db_name)
             if not sh:
-                st.error(f"❌ 無法開啟資料庫: {db_name}")
+                st.error(f"❌ 無法開啟資料庫: {actual_db_name}")
                 return
     except SpreadsheetNotFound:
-        st.error(f"❌ 找不到資料庫: {db_name}")
-        st.info("💡 請確認 Google Sheet 名稱是否正確，並已共用給 Service Account")
+        st.error(f"❌ 找不到資料庫: {actual_db_name}")
+        if "[歷史]" in selected_db_label:
+            st.info("💡 尚未建立此年度的歷史備份檔案，請切換回當前主庫或其他年度。")
+        else:
+            st.info("💡 請確認 Google Sheet 名稱是否正確，並已共用給 Service Account")
         return
     except Exception as e:
         st.error(f"❌ 資料庫連線失敗: {e}")
@@ -208,7 +222,6 @@ def show(client, db_name, user_email, real_name, is_manager):
             key="overview_range_picker"
         )
 
-    # 【調整順序】先處理人員選擇，確保 UI 被渲染，避免 key 被清除
     # === 2. 人員選擇 ===
     user_role = "manager" if is_manager else "sales"
     current_user_name = real_name
@@ -290,24 +303,18 @@ def show(client, db_name, user_email, real_name, is_manager):
             st.info("請選擇人員或群組 (預設不顯示，請手動選擇)。")
         else:
             st.error("找不到您的資料表，請聯繫管理員。")
-        # 這裡不 return，繼續往下走，讓日期驗證邏輯也能顯示警告
-        # 但如果是空的，下方的資料查詢自然不會跑出結果
 
-    # 【調整順序】最後再驗證日期，若不完整則暫停，不影響上方 UI
     if isinstance(date_range, tuple) and len(date_range) == 2:
         start_date, end_date = date_range
     else:
         st.warning("請選擇完整的起始與結束日期")
         return
         
-    # 若人員為空，在這裡阻擋
     if not target_users:
         return
 
     # 【資安強化】權限二確 (Permission Double-Check)
-    # 在開始查詢資料前，再次驗證權限，防止 Session 竄改或邏輯漏洞
     if not is_manager:
-        # 非管理員，必須確保查詢對象只有自己
         invalid_targets = [u for u in target_users if u != real_name]
         if invalid_targets:
             st.error("⛔ 安全警告：權限異常，您無法查看其他人的資料。")
@@ -327,20 +334,18 @@ def show(client, db_name, user_email, real_name, is_manager):
     estimated_time = len(target_users) * rate_limiter.current_delay
     st.info(f"⏱️ 正在讀取 {len(target_users)} 位業務員資料 (預計需時 {estimated_time:.1f} 秒)")
     
-    # 防止重複查詢的機制
-    query_key = f"{start_date}_{end_date}_{'_'.join(sorted(target_users))}"
+    # 防止重複查詢的機制 (加入實際資料庫名稱做為 Cache Key)
+    query_key = f"{actual_db_name}_{start_date}_{end_date}_{'_'.join(sorted(target_users))}"
     
     if "last_query_key" not in st.session_state:
         st.session_state.last_query_key = ""
     if "last_query_data" not in st.session_state:
         st.session_state.last_query_data = None
     
-    # 如果查詢條件相同，直接使用快取結果
     if st.session_state.last_query_key == query_key and st.session_state.last_query_data is not None:
         st.success("✅ 使用快取資料 (無需重新查詢)")
         final_df = st.session_state.last_query_data
     else:
-        # 執行新查詢
         with st.spinner(f"彙整中..."):
             progress_bar = st.progress(0)
             status_text = st.empty()
@@ -383,22 +388,18 @@ def show(client, db_name, user_email, real_name, is_manager):
 
         final_df = pd.concat(all_data, ignore_index=True)
         
-        # 儲存到快取
         st.session_state.last_query_key = query_key
         st.session_state.last_query_data = final_df
     
-    # 統計摘要
     st.subheader(f"📈 統計摘要 ({start_date} ~ {end_date})")
     m1, m2, m3 = st.columns(3)
     m1.metric("總填寫筆數", len(final_df))
     m2.metric("參與業務人數", len(final_df["業務員"].unique()))
     
-    # 【修正】排除 "-" 與空白的客戶名稱，只計算有效客戶
     unique_clients = final_df["客戶名稱"].unique()
     valid_clients = [c for c in unique_clients if str(c).strip() not in ["-", ""]]
     m3.metric("拜訪客戶數", len(valid_clients))
 
-    # 詳細表格
     st.subheader("📝 詳細列表")
     
     MAX_DISPLAY_ROWS = 1000
@@ -418,7 +419,6 @@ def show(client, db_name, user_email, real_name, is_manager):
         }
     )
 
-    # 匯出 CSV
     fname = f"業務日報彙整_{start_date}_{end_date}.csv"
     
     export_df = final_df.copy()
@@ -434,7 +434,6 @@ def show(client, db_name, user_email, real_name, is_manager):
         type="primary"
     )
     
-    # 手動清除快取按鈕
     st.markdown("---")
     if st.button("🔄 重新載入頁面"):
         st.session_state.last_query_key = ""
