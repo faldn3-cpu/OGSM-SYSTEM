@@ -218,7 +218,7 @@ def show_calculator_dialog(spec, desc, base_price):
 #  4. 主頁面顯示
 # ==========================================
 def show(client, db_name, user_email, real_name, is_manager):
-    st.title("💰 經銷牌價查詢")
+    st.title("💰 經銷價查詢")
     
     # 讀取資料 (使用優化後的函式)
     # df 為資料表, warning 為離線警告訊息
