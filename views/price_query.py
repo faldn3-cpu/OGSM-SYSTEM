@@ -220,6 +220,21 @@ def show_calculator_dialog(spec, desc, base_price):
 def show(client, db_name, user_email, real_name, is_manager):
     st.title("💰 經銷價查詢")
     
+    # === 【新增】專屬 welsong 的強制更新按鈕 ===
+    # 為確保準確性，提取原本 user_email 中的真實帳號部分 (處理複合字串 "welsong@seec.com.tw (模擬: ...)")
+    current_email = str(user_email).split(" ")[0].strip().lower()
+    if current_email == "welsong@seec.com.tw":
+        if st.button("🔄 強制更新最新牌價 (管理員專用)"):
+            with st.spinner("正在清除快取並重新下載資料..."):
+                if os.path.exists(CACHE_FILE):
+                    os.remove(CACHE_FILE)
+                fetch_price_data.clear()
+                fetch_last_update_date.clear()
+                time.sleep(1)
+            st.success("✅ 快取已清除，正在重新載入最新資料...")
+            time.sleep(1)
+            st.rerun()
+    
     # 讀取資料 (使用優化後的函式)
     # df 為資料表, warning 為離線警告訊息
     df, warning_msg = fetch_price_data(db_name, client)
