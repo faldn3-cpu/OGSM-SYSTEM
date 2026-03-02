@@ -222,12 +222,12 @@ def show(client, db_name, user_email, real_name, is_manager):
     st.title("💰 經銷價查詢")
     
     # === 【修改】更寬容的專屬權限判斷 ===
-    # 只要 Email 包含 welsong 或 真實姓名包含 曾維崧，即顯示醒目按鈕
+    # 只要 Email 包含 welsong 或 真實姓名，即顯示醒目按鈕
     current_email = str(user_email).lower()
     current_name = str(real_name)
     
-    if "welsong" in current_email or "曾維崧" in current_name:
-        if st.button("🔄 強制更新最新牌價 (曾維崧 專用)", type="primary", use_container_width=True):
+    if "welsong" in current_email :
+        if st.button("🔄 強制更新最新牌價 ", type="primary", use_container_width=True):
             with st.spinner("正在清除快取並重新下載資料..."):
                 if os.path.exists(CACHE_FILE):
                     try:
