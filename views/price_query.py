@@ -214,23 +214,32 @@ def show_calculator_dialog(spec, desc, base_price):
         <div style="font-size:2em; font-weight:bold;">${final_p:,.0f}</div>
     </div>
     """, unsafe_allow_html=True)
+
 # ==========================================
 #  4. 主頁面顯示
 # ==========================================
 def show(client, db_name, user_email, real_name, is_manager):
     st.title("💰 經銷價查詢")
     
-    # === 【新增】專屬 welsong 的強制更新按鈕 ===
-    # 為確保準確性，提取原本 user_email 中的真實帳號部分 (處理複合字串 "welsong@seec.com.tw (模擬: ...)")
-    current_email = str(user_email).split(" ")[0].strip().lower()
-    if current_email == "welsong@seec.com.tw":
-        if st.button("🔄 強制更新最新牌價 (管理員專用)"):
+    # === 【修改】更寬容的專屬權限判斷 ===
+    # 只要 Email 包含 welsong 或 真實姓名包含 曾維崧，即顯示醒目按鈕
+    current_email = str(user_email).lower()
+    current_name = str(real_name)
+    
+    if "welsong" in current_email or "曾維崧" in current_name:
+        if st.button("🔄 強制更新最新牌價 (曾維崧 專用)", type="primary", use_container_width=True):
             with st.spinner("正在清除快取並重新下載資料..."):
                 if os.path.exists(CACHE_FILE):
-                    os.remove(CACHE_FILE)
+                    try:
+                        os.remove(CACHE_FILE)
+                    except Exception as e:
+                        logging.warning(f"刪除本地快取檔案失敗: {e}")
+                
+                # 清除 Streamlit 快取記憶體
                 fetch_price_data.clear()
                 fetch_last_update_date.clear()
                 time.sleep(1)
+            
             st.success("✅ 快取已清除，正在重新載入最新資料...")
             time.sleep(1)
             st.rerun()
@@ -318,9 +327,6 @@ def show(client, db_name, user_email, real_name, is_manager):
             mask = df.apply(lambda row: row.astype(str).str.contains(query, case=False, regex=False).any(), axis=1)
             result_df = df[mask]
             
-            # 【修改】移除此處的 write_search_log，改至下方「試算」按鈕觸發
-            # write_search_log(...) <--- 已移除
-            
         except Exception as e:
             st.error("搜尋發生錯誤")
             logging.error(f"Search error: {e}")
@@ -390,7 +396,7 @@ def show(client, db_name, user_email, real_name, is_manager):
                     with c2:
                         st.write("")
                         if base_price > 0:
-                            # 【修改】Log 紀錄移至此處 (只有點擊試算才紀錄)
+                            # Log 紀錄移至此處 (只有點擊試算才紀錄)
                             if st.button("試算", key=f"btn_{idx}", use_container_width=True):
                                 # 這裡才會寫入 Google Sheet
                                 write_search_log(client, db_name, user_email, product_name, "試算選取")
