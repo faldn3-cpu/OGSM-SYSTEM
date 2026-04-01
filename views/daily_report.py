@@ -1,4 +1,5 @@
 import streamlit as st
+import requests
 from datetime import date, datetime, timezone, timedelta
 import pandas as pd
 import gspread 
@@ -321,61 +322,58 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
 # ==========================================
 #  新增函式：儲存至客戶關係表單
 # ==========================================
-def save_to_crm_sheet(client, data_dict):
-    """將資料寫入客戶關係表單 (回覆)"""
-    try:
-        sh = client.open(CRM_DB_NAME)
-        try:
-            ws = sh.worksheet("表單回應 1")
-        except:
-            ws = sh.sheet1
-        
-        # 使用專用的格式轉換函式
-        timestamp_str = get_crm_time_str()             # 格式: 2026/1/26 下午 4:15:05
-        date_str = format_crm_date(data_dict.get("拜訪日期", "")) # 格式: 2026/1/22
-        
-        # 原始資料列表
-        raw_row_data = [
-            timestamp_str,                  # A1 時間戳記
-            data_dict.get("填寫人", ""),     # B1
-            data_dict.get("客戶名稱", ""),   # C1
-            data_dict.get("通路商", ""),     # D1
-            data_dict.get("競爭通路", ""),   # E1
-            data_dict.get("行動方案", ""),   # F1
-            data_dict.get("客戶性質", ""),   # G1
-            data_dict.get("流失取回", ""),   # H1
-            data_dict.get("產業別", ""),     # I1
-            date_str,                       # J1 拜訪日期
-            data_dict.get("推廣產品", ""),   # K1
-            data_dict.get("工作內容", ""),   # L1
-            data_dict.get("產出日期", ""),   # M1
-            data_dict.get("總金額", ""),     # N1
-            data_dict.get("依賴事項", ""),   # O1
-            data_dict.get("實際行程", ""),   # P1
-            data_dict.get("競爭品牌", ""),   # Q1
-            data_dict.get("客戶所屬", "")    # R1
-        ]
-        
-        # 【資安強化】套用輸入清洗
-        cleaned_row_data = [sanitize_csv_field(val) for val in raw_row_data]
-        
-    # 【最終解法】使用 append_row 並啟用 INSERT_ROWS
-        # 這是與 Google 表單共存的唯一正確寫法，會自動尋找表格底部並擴展範圍，
-        # 確保 Google 表單的內部指標會跟著往下推，不會再發生插隊現象。
-        try:
-            ws.append_row(
-                cleaned_row_data,
-                value_input_option='USER_ENTERED',
-                insert_data_option='INSERT_ROWS'
-            )
-        except Exception as update_err:
-            logging.error(f"Append with INSERT_ROWS failed: {update_err}")
-            raise
+def save_to_crm_sheet(client, crm_data):
+    """
+    【終極解法】不透過 gspread 寫入，改用 HTTP POST 模擬送出 Google 表單。
+    藉此觸發 Google 表單內部計數器，確保資料永遠按照順序寫入，不會互相擠壓。
+    """
+    # 這是你表單真正的 POST 接收端點
+    url = "https://docs.google.com/forms/d/e/1FAIpQLSdb1oeYmCenAjvRjFzYfKVWkIBzW105wb2K-JTj4YgJCFwkJQ/formResponse"
+    
+    # 將 Python 變數精準對應到 Google 表單的隱藏 ID
+    payload = {
+        "entry.96119068": crm_data.get("填寫人", ""),
+        "entry.2111504476": crm_data.get("客戶名稱", ""),
+        "entry.1357642524": crm_data.get("通路商", ""),
+        "entry.1714915871": crm_data.get("行動方案", ""),
+        "entry.934052072": crm_data.get("客戶性質", ""),
+        "entry.1451405577": crm_data.get("產業別", ""),
+        "entry.516181115": str(crm_data.get("拜訪日期", "")),  # 日期字串 YYYY-MM-DD
+        "entry.783279195": crm_data.get("工作內容", ""),
+        "entry.1781871147": crm_data.get("產出日期", ""),
+        "entry.1117419766": crm_data.get("總金額", ""),
+        "entry.1488606205": crm_data.get("實際行程", ""),
+        "entry.850004033": crm_data.get("客戶所屬", "")
+    }
 
-        return True, "上傳成功"
+    # 處理選填欄位
+    if crm_data.get("競爭通路"): 
+        payload["entry.1890292749"] = crm_data["競爭通路"]
+    if crm_data.get("流失取回"): 
+        payload["entry.152392267"] = crm_data["流失取回"]
+    if crm_data.get("依賴事項"): 
+        payload["entry.847639223"] = crm_data["依賴事項"]
+
+    # 處理複選題 (requests 套件會自動將 List 轉換為多個相同的 key 發送)
+    if "推廣產品_list" in crm_data:
+        payload["entry.1642331636"] = crm_data["推廣產品_list"]
+    if "競爭品牌_list" in crm_data:
+        payload["entry.1280930959"] = crm_data["競爭品牌_list"]
+
+    try:
+        # 發送 POST 請求模擬提交表單
+        response = requests.post(url, data=payload)
+        
+        # Google 表單成功提交會回傳 HTTP 200
+        if response.status_code == 200:
+            return True, "✅ 上傳成功！"
+        else:
+            logging.error(f"Form Submit Failed. Status: {response.status_code}")
+            return False, f"上傳失敗，狀態碼: {response.status_code}"
+            
     except Exception as e:
-        logging.error(f"Save to CRM failed: {e}")
-        return False, f"上傳失敗: {e}"
+        logging.error(f"Form Submit Error: {str(e)}")
+        return False, f"發生連線錯誤: {str(e)}"
 
 # ==========================================
 #  輸入驗證與清理
@@ -860,6 +858,7 @@ def show(client, db_name, user_email, real_name):
                 st.rerun()
 
             if submitted:
+                # 【修改】為了配合 Google 表單的 HTTP POST，保留原始的 List 格式
                 crm_data = {
                     "填寫人": f_user,
                     "客戶名稱": f_client,
@@ -870,13 +869,13 @@ def show(client, db_name, user_email, real_name):
                     "流失取回": f_lost_rec if f_lost_rec != "無" else "",
                     "產業別": f_industry,
                     "拜訪日期": f_date,
-                    "推廣產品": ", ".join(f_products),
+                    "推廣產品_list": f_products,     # <--- 修改：不再使用 join，直接傳 List
                     "工作內容": f_content,
                     "產出日期": f_est_date,
                     "總金額": str(f_amount),
                     "依賴事項": f_dependency,
                     "實際行程": f_status_desc,
-                    "競爭品牌": f_comp_brand,
+                    "競爭品牌_list": f_comp_brand,   # <--- 修改：直接傳 List
                     "客戶所屬": f_owner
                 }
                 
