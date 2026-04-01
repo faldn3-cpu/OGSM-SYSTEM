@@ -355,12 +355,17 @@ def save_to_crm_sheet(client, data_dict):
         # 【資安強化】套用輸入清洗
         cleaned_row_data = [sanitize_csv_field(val) for val in raw_row_data]
         
-        # 【修正】使用物理定位法 (Safe Append)
-        # 防止因表格格式導致自動判斷錯誤而覆蓋資料
+        # 【修正 v2】忽略格式空白列，只計算真正有內容的列數
+        # 原本 col_values(1) 會把有格式但無內容的空白列也計入，
+        # 導致資料被寫到遠離正常資料區的位置
         try:
-            # 讀取 A 欄 (Timestamp) 確認目前行數
-            col_a = ws.col_values(1) 
-            next_row = len(col_a) + 1
+            col_a = ws.col_values(1)
+            # 逐列從頭掃描，記錄最後一個真正有值的列號
+            last_real_row = 0
+            for i, val in enumerate(col_a):
+                if str(val).strip() != '':
+                    last_real_row = i + 1  # gspread 列號從 1 開始
+            next_row = last_real_row + 1
             ws.update(values=[cleaned_row_data], range_name=f"A{next_row}")
         except Exception as update_err:
             # 如果讀取 A 欄失敗，退回使用 append_row (備援)
