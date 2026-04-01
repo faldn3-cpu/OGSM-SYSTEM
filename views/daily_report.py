@@ -359,9 +359,7 @@ def save_to_crm_sheet(client, data_dict):
         # 【資安強化】套用輸入清洗
         cleaned_row_data = [sanitize_csv_field(val) for val in raw_row_data]
         
-        # 【修正 v2】忽略格式空白列，只計算真正有內容的列數
-        # 原本 col_values(1) 會把有格式但無內容的空白列也計入，
-        # 導致資料被寫到遠離正常資料區的位置
+        # 【修正 v3】模擬 Google 表單原生行為：強制「插入新列」而非只更新儲存格
         try:
             col_a = ws.col_values(1)
             # 逐列從頭掃描，記錄最後一個真正有值的列號
@@ -370,11 +368,13 @@ def save_to_crm_sheet(client, data_dict):
                 if str(val).strip() != '':
                     last_real_row = i + 1  # gspread 列號從 1 開始
             next_row = last_real_row + 1
-            ws.update(values=[cleaned_row_data], range_name=f"A{next_row}")
+            
+            # 使用 insert_row 直接插入一列，確保與 Google 表單指標同步，並繼承上方格式
+            ws.insert_row(cleaned_row_data, index=next_row, value_input_option='USER_ENTERED')
         except Exception as update_err:
-            # 如果讀取 A 欄失敗，退回使用 append_row (備援)
-            logging.warning(f"Physical append failed, fallback to append_row: {update_err}")
-            ws.append_row(cleaned_row_data)
+            # 如果插入失敗，退回使用 append_row (備援)
+            logging.warning(f"Physical insert failed, fallback to append_row: {update_err}")
+            ws.append_row(cleaned_row_data, value_input_option='USER_ENTERED')
 
         return True, "上傳成功"
     except Exception as e:
