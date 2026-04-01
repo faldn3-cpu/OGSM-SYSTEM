@@ -359,22 +359,18 @@ def save_to_crm_sheet(client, data_dict):
         # 【資安強化】套用輸入清洗
         cleaned_row_data = [sanitize_csv_field(val) for val in raw_row_data]
         
-        # 【修正 v3】模擬 Google 表單原生行為：強制「插入新列」而非只更新儲存格
+    # 【最終解法】使用 append_row 並啟用 INSERT_ROWS
+        # 這是與 Google 表單共存的唯一正確寫法，會自動尋找表格底部並擴展範圍，
+        # 確保 Google 表單的內部指標會跟著往下推，不會再發生插隊現象。
         try:
-            col_a = ws.col_values(1)
-            # 逐列從頭掃描，記錄最後一個真正有值的列號
-            last_real_row = 0
-            for i, val in enumerate(col_a):
-                if str(val).strip() != '':
-                    last_real_row = i + 1  # gspread 列號從 1 開始
-            next_row = last_real_row + 1
-            
-            # 使用 insert_row 直接插入一列，確保與 Google 表單指標同步，並繼承上方格式
-            ws.insert_row(cleaned_row_data, index=next_row, value_input_option='USER_ENTERED')
+            ws.append_row(
+                cleaned_row_data,
+                value_input_option='USER_ENTERED',
+                insert_data_option='INSERT_ROWS'
+            )
         except Exception as update_err:
-            # 如果插入失敗，退回使用 append_row (備援)
-            logging.warning(f"Physical insert failed, fallback to append_row: {update_err}")
-            ws.append_row(cleaned_row_data, value_input_option='USER_ENTERED')
+            logging.error(f"Append with INSERT_ROWS failed: {update_err}")
+            raise
 
         return True, "上傳成功"
     except Exception as e:
