@@ -51,7 +51,7 @@ CRM_OPT_EST_DATE = [
 CRM_OPT_COMP_BRAND = ["台灣品牌", "日系品牌", "歐系品牌", "其他品牌"]
 # 客戶所屬
 CRM_OPT_OWNER = [
-    "曾維崧", "張何達", "曾仁君", "溫達仁", "楊家豪", "莊富丞", "謝瑞騏", "何宛茹", "張書偉", "邱文輝", "葉仁豪", "其他"
+    "張何達", "曾仁君", "溫達仁", "楊家豪", "莊富丞", "謝瑞騏", "何宛茹", "張書偉", "邱文輝", "葉仁豪", "其他"
 ]
 
 # ==========================================
@@ -325,43 +325,27 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
 def save_to_crm_sheet(client, crm_data):
     url = "https://docs.google.com/forms/d/e/1FAIpQLSdb1oeYmCenAjvRjFzYfKVWkIBzW105wb2K-JTj4YgJCFwkJQ/formResponse"
     
-    # 🔴 1. 必填防呆檢查 (防止因為空值被 Google 拒絕)
-    required_fields = {
-        "填寫人": crm_data.get("填寫人"),
-        "客戶名稱": crm_data.get("客戶名稱"),
-        "通路商": crm_data.get("通路商"),
-        "行動方案": crm_data.get("行動方案"),
-        "客戶性質": crm_data.get("客戶性質"),
-        "產業別": crm_data.get("產業別"),
-        "工作內容": crm_data.get("工作內容"),
-        "實際行程": crm_data.get("實際行程"),
-        "客戶所屬": crm_data.get("客戶所屬"),
-        "推廣產品": crm_data.get("推廣產品_list"),
-        "競爭品牌": crm_data.get("競爭品牌_list"),
-    }
-    
-    for key, val in required_fields.items():
-        if not val or (isinstance(val, list) and len(val) == 0):
-            return False, f"⚠️ 錯誤：必填欄位『{key}』尚未填寫或勾選！"
+    # --- 1. 客戶性質 (精準對應) ---
+    type_val = crm_data.get("客戶性質", "")
+    if "(A)" in type_val or "A客戶" in type_val: type_val = "A客戶 - 大手客戶 & 既有客戶"
+    elif "(B)" in type_val or "B客戶" in type_val: type_val = "B客戶 - 前一年新成交"
+    elif "(C)" in type_val or "C客戶" in type_val: type_val = "C客戶 - 預計開發及今年新成交"
 
-    # 🟡 2. 特殊字串精準校正 (自動修復常見的符號差異)
+    # --- 2. 行動方案 & 產業別 ---
     action = crm_data.get("行動方案", "")
     if "電話聯繫" in action: action = "電話聯繫 & 報價事宜 & 其他"
 
-    type_val = crm_data.get("客戶性質", "")
-    if "A客戶" in type_val and "大手" in type_val: type_val = "A客戶 - 大手客戶 & 既有客戶"
-    if "D-A客戶" in type_val and "大手" in type_val: type_val = "D-A客戶 - 經銷商 大手客戶 & 既有客戶"
-
     industry_val = crm_data.get("產業別", "")
     if "電子產業" in industry_val: industry_val = "電子產業 (半導體產業 & PCB產業 & AI產業...)"
-    if "自動化設備" in industry_val: industry_val = "自動化設備產業(工具機 & 輸送設備 & 廠房設備...)"
-    if "節能產業" in industry_val: industry_val = "節能產業(風車 & 水泵 & 空調 & 工程案...)"
-    if "通路商" in industry_val: industry_val = "通路商 (經銷商 & 二次店 & 上控...)"
+    elif "自動化設備" in industry_val: industry_val = "自動化設備產業(工具機 & 輸送設備 & 廠房設備...)"
+    elif "節能產業" in industry_val: industry_val = "節能產業(風車 & 水泵 & 空調 & 工程案...)"
+    elif "通路商" in industry_val: industry_val = "通路商 (經銷商 & 二次店 & 上控...)"
 
+    # --- 3. 處理日期 ---
     visit_date = crm_data.get("拜訪日期")
     visit_date_str = visit_date.strftime("%Y-%m-%d") if hasattr(visit_date, 'strftime') else str(visit_date)
 
-    # 🟢 3. 組合 Payload (使用 List of Tuples，這是處理 Google 複選題最安全的格式)
+    # --- 4. 基礎 Payload ---
     payload_list = [
         ("entry.96119068", crm_data.get("填寫人")),
         ("entry.2111504476", crm_data.get("客戶名稱")),
@@ -372,34 +356,48 @@ def save_to_crm_sheet(client, crm_data):
         ("entry.516181115", visit_date_str),
         ("entry.783279195", crm_data.get("工作內容")),
         ("entry.1781871147", crm_data.get("產出日期", "")),
-        ("entry.1117419766", crm_data.get("總金額", "")),
+        ("entry.1117419766", str(crm_data.get("總金額", ""))),
         ("entry.1488606205", crm_data.get("實際行程")),
-        ("entry.850004033", crm_data.get("客戶所屬"))
+        # ⚠️ 注意：如果 UI 傳入「曾維崧」，但表單沒有此選項，此處直接保留原值。
+        # 你必須去 Google 表單後台，在「客戶所屬」那一題加上「曾維崧」，否則依然會 400！
+        ("entry.850004033", crm_data.get("客戶所屬")) 
     ]
 
-    # 加入選填欄位
+    # 加入選填
     if crm_data.get("競爭通路"): payload_list.append(("entry.1890292749", crm_data["競爭通路"]))
     if crm_data.get("流失取回"): payload_list.append(("entry.152392267", crm_data["流失取回"]))
     if crm_data.get("依賴事項"): payload_list.append(("entry.847639223", crm_data["依賴事項"]))
 
-    # 展開複選題 (例如勾選兩項，就會變成兩個相同的 entry 送出)
-    for prod in crm_data.get("推廣產品_list", []):
-        payload_list.append(("entry.1642331636", prod))
-    for brand in crm_data.get("競爭品牌_list", []):
-        payload_list.append(("entry.1280930959", brand))
+    # --- 5. 處理推廣產品 (陣列防呆 + 全名翻譯) ---
+    products = crm_data.get("推廣產品_list", [])
+    if isinstance(products, str): products = [products]  # 防呆：如果是字串，包裝成陣列
+    
+    for p in products:
+        if "士林品" in p: payload_list.append(("entry.1642331636", "士林品(變頻器、伺服、小型PLC、人機介面、溫控器、SD-INV)"))
+        elif "三菱品" in p: payload_list.append(("entry.1642331636", "三菱品(變頻器、伺服、小型PLC、大型PLC、人機介面、運動控制器、機械手臂)"))
+        elif "松下品" in p: payload_list.append(("entry.1642331636", "松下品(感測器、雷射雕刻機)、IDEC、台灣氣立CHELIC"))
+        elif "減速機" in p: payload_list.append(("entry.1642331636", "減速機(主推Nidec、利茗、松品)"))
+        elif "開關類" in p: payload_list.append(("entry.1642331636", "開關類(士林品牌)"))
+        elif "太陽能" in p: payload_list.append(("entry.1642331636", "太陽能"))
+        elif "其他" in p: payload_list.append(("entry.1642331636", "其他(溫控器、警示燈)"))
+        else: payload_list.append(("entry.1642331636", p))
 
-    # 🔵 4. 發送請求與除錯顯示
+    # --- 6. 處理競爭品牌 (陣列防呆) ---
+    brands = crm_data.get("競爭品牌_list", [])
+    if isinstance(brands, str): brands = [brands] # 防呆：解決被拆成「台」「灣」「品」「牌」的問題
+    
+    for b in brands:
+        payload_list.append(("entry.1280930959", b))
+
+    # --- 7. 發送 POST ---
     try:
         response = requests.post(url, data=payload_list)
-        
         if response.status_code == 200:
             return True, "✅ 上傳成功！"
         else:
-            # 如果還是 400，直接把我們送出的資料印在畫面上，一比對就知道哪裡有錯！
-            logging.error(f"Form Submit Failed. Status: {response.status_code}")
             import streamlit as st
-            st.error("🚨 送出失敗，請截圖下方資料，檢查哪一個文字跟表單選項不一樣：")
-            st.json(payload_list)
+            logging.error(f"Form Submit Failed. Status: {response.status_code}")
+            st.error(f"🚨 送出失敗 (400)！請檢查「客戶所屬」({crm_data.get('客戶所屬')}) 是否有建在 Google 表單的選項中。")
             return False, f"上傳失敗 (400)"
             
     except Exception as e:
