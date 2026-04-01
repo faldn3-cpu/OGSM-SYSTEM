@@ -42,11 +42,15 @@ st.set_page_config(
 #  🛡️ 強力喚醒模式 (Hold the Door)
 # ==========================================
 if "wake_up" in st.query_params:
-    print("⏰ Wake up signal received. Holding connection...") 
+    print("⏰ Wake up signal received. Holding connection...")
     st.title("🤖 System is Waking Up...")
     st.write("Holding the door open for 30 seconds...")
-    time.sleep(30)
-    st.write("Done. System is live.")
+    # 改用倒數計時迴圈，每秒更新畫面，避免 time.sleep(30) 讓連線被伺服器強制切斷
+    countdown_placeholder = st.empty()
+    for i in range(30, 0, -1):
+        countdown_placeholder.info(f"⏳ 系統保持喚醒中... 剩餘 {i} 秒")
+        time.sleep(1)
+    countdown_placeholder.success("✅ Done. System is live.")
     st.stop()
 
 # ==========================================
@@ -134,8 +138,7 @@ SMTP_PASSWORD = ""
 PRICE_DB_NAME = '經銷牌價表_資料庫'
 REPORT_DB_NAME = '業務日報表_資料庫'
 
-ASSISTANTS = ["serena.huang@seec.com.tw", "sarah.wang@seec.com.tw", "yingsin.ye@seec.com.tw"]
-MANAGERS = ["welsong@seec.com.tw", "Dennis.chang@seec.com.tw", "steventseng@seec.com.tw"]
+VALID_ROLES = {"admin", "manager", "assistant", "sales"}  # 合法角色清單
 
 try:
     if "email" in st.secrets:
@@ -475,12 +478,23 @@ def change_password(email, new_password):
     try:
         sh = client.open(PRICE_DB_NAME)
         ws = sh.worksheet("Users")
+
+        # 找出標題列，確認 password 欄的實際位置，避免硬寫欄號
+        headers = ws.row_values(1)
+        try:
+            pwd_col_index = headers.index("password") + 1  # gspread 欄號從 1 開始
+        except ValueError:
+            logging.error("change_password: 'password' column not found in Users sheet headers")
+            return False
+
         cell = ws.find(email)
         if cell:
-            ws.update_cell(cell.row, 2, hash_password(new_password))
+            ws.update_cell(cell.row, pwd_col_index, hash_password(new_password))
             return True
         return False
-    except: return False
+    except Exception as e:
+        logging.error(f"change_password error: {e}")
+        return False
 
 def check_email_exists(email):
     client = get_client()
@@ -497,11 +511,28 @@ def post_login_init(email, name, role_override=None):
     st.session_state.user_email = email
     st.session_state.real_name = name
     st.session_state.login_attempts = 0
-    if role_override: st.session_state.role = role_override
+
+    if role_override:
+        # 管理員切換身份時直接指定角色
+        st.session_state.role = role_override
     else:
-        is_mgr = email.strip().lower() in [m.lower() for m in MANAGERS]
-        is_asst = email.strip().lower() in [a.lower() for a in ASSISTANTS]
-        st.session_state.role = "manager" if is_mgr else "assistant" if is_asst else "sales"
+        # 從 Google Sheet Users 表讀取 role 欄位，不再依賴硬寫名單
+        # 若欄位不存在、空白、或填錯，預設為 sales (最低權限，安全考量)
+        role_from_sheet = "sales"
+        try:
+            all_users = get_users_list_cached()
+            for user in all_users:
+                if str(user.get("email", "")).strip().lower() == email.strip().lower():
+                    raw_role = str(user.get("role", "")).strip().lower()
+                    if raw_role in VALID_ROLES:
+                        role_from_sheet = raw_role
+                    else:
+                        logging.warning(f"User {email} has invalid role '{raw_role}', defaulting to sales")
+                    break
+        except Exception as e:
+            logging.error(f"post_login_init: failed to fetch role for {email}: {e}")
+        st.session_state.role = role_from_sheet
+
     st.session_state.page_radio = "💰 牌價表查詢系統" if st.session_state.role == "assistant" else "📝 OGSM日報系統"
 
 # 【新增】管理員切換身分的回調函式 (Callback)
@@ -708,11 +739,11 @@ def main():
                 audit_identity = f"{st.session_state.real_user_email} (模擬: {st.session_state.user_email})"
             
             # 將 audit_identity 傳入，確保 SearchLogs 紀錄雙重身分
-            price_query.show(client, PRICE_DB_NAME, audit_identity, st.session_state.real_name, st.session_state.role=="manager")
+            price_query.show(client, PRICE_DB_NAME, audit_identity, st.session_state.real_name, st.session_state.role in ("manager", "admin"), st.session_state.role=="admin")
         elif sel == "📊 OGSM日報總覽": 
-            report_overview.show(client, REPORT_DB_NAME, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
+            report_overview.show(client, REPORT_DB_NAME, st.session_state.user_email, st.session_state.real_name, st.session_state.role in ("manager", "admin"))
         elif sel == "📊 CRM 商機總覽":
-            crm_overview.show(client, st.session_state.user_email, st.session_state.real_name, st.session_state.role=="manager")
+            crm_overview.show(client, st.session_state.user_email, st.session_state.real_name, st.session_state.role in ("manager", "admin"))
         elif sel == "🔑 修改密碼":
             st.subheader("修改密碼")
             p1 = st.text_input("新密碼 (至少 8 位，含英數)", type="password", max_chars=50)
