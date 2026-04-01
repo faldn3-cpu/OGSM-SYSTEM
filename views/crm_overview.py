@@ -261,10 +261,19 @@ def show(client, user_email, real_name, is_manager):
             return
 
     # 3. 資料過濾邏輯
-    # 日期篩選：用 isinstance 確保只比較真正的 date 物件，空值自動排除
-    mask_date = df_original["拜訪日期_dt"].apply(
-        lambda x: isinstance(x, date) and start_date <= x <= end_date
-    )
+    # 日期篩選：pd.NaT 在部分 pandas 版本會通過 isinstance(x, date) 但比較時爆炸
+    # 加上 pd.isnull() 雙重防護，確保 NaT / None / 空字串全部排除
+    def safe_date_in_range(x):
+        try:
+            if x is None or pd.isnull(x):
+                return False
+            if not isinstance(x, date):
+                return False
+            return start_date <= x <= end_date
+        except Exception:
+            return False
+
+    mask_date = df_original["拜訪日期_dt"].apply(safe_date_in_range)
     df_filtered = df_original.loc[mask_date].copy()
 
     mask_user = pd.Series([False] * len(df_filtered), index=df_filtered.index)
