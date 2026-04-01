@@ -5,7 +5,6 @@ import gspread
 from datetime import date, datetime, timedelta
 import time
 import logging
-from gspread.exceptions import SpreadsheetNotFound
 
 # === 設定 ===
 CRM_DB_NAME = "客戶關係表單 (回覆)"
@@ -55,6 +54,7 @@ def load_crm_data_cached(_client, db_name, sheet_name):
         except:
             ws = sh.sheet1
         
+        # 改用 get_all_values 以避免 header 重複錯誤
         rows = ws.get_all_values()
         if not rows or len(rows) < 2:
             return pd.DataFrame()
@@ -64,6 +64,8 @@ def load_crm_data_cached(_client, db_name, sheet_name):
         
         df = pd.DataFrame(data, columns=headers)
         
+        # 智慧欄位對應
+        # 【修改 1】新增 "依賴事項" 到對應表，確保它被正確讀取
         column_keywords = {
             "客戶名稱": "客戶名稱",
             "推廣產品": "推廣產品",
@@ -72,7 +74,7 @@ def load_crm_data_cached(_client, db_name, sheet_name):
             "案件狀況說明": "實際行程",
             "拜訪目的": "工作內容",
             "產出日期": "產出日期",
-            "依賴事項": "依賴事項"  
+            "依賴事項": "依賴事項"  # 新增
         }
         
         rename_map = {}
@@ -99,10 +101,6 @@ def load_crm_data_cached(_client, db_name, sheet_name):
         df.fillna("", inplace=True)
         return df
 
-    except SpreadsheetNotFound:
-        logging.warning(f"CRM Spreadsheet not found: {db_name}")
-        st.error(f"❌ 找不到資料庫: {db_name} (請確認歷史庫檔案是否存在)")
-        return pd.DataFrame()
     except Exception as e:
         logging.error(f"CRM data load error: {e}")
         st.error(f"無法讀取 CRM 資料: {e}")
@@ -112,22 +110,11 @@ def load_crm_data_cached(_client, db_name, sheet_name):
 def show(client, user_email, real_name, is_manager):
     st.title("📊 CRM 商機總覽")
 
-    # === 0. 資料庫年份選擇 (歷史歸檔機制) ===
-    current_year = date.today().year
-    db_options = {
-        f"🟢 [當前] {current_year} 年度 (主庫)": CRM_DB_NAME,
-        f"🗄️ [歷史] {current_year - 1} 年度": f"{CRM_DB_NAME}_歷史庫_{current_year - 1}",
-        f"🗄️ [歷史] {current_year - 2} 年度": f"{CRM_DB_NAME}_歷史庫_{current_year - 2}",
-        f"🗄️ [歷史] {current_year - 3} 年度": f"{CRM_DB_NAME}_歷史庫_{current_year - 3}"
-    }
-    selected_db_label = st.selectbox("📂 選擇查詢庫 (年度)", options=list(db_options.keys()))
-    actual_db_name = db_options[selected_db_label]
-
-    # 1. 讀取資料 (改為傳入實際的 actual_db_name)
-    df_original = load_crm_data_cached(client, actual_db_name, CRM_SHEET_NAME)
+    # 1. 讀取資料
+    df_original = load_crm_data_cached(client, CRM_DB_NAME, CRM_SHEET_NAME)
     
     if df_original.empty:
-        st.info("此資料庫尚無 CRM 資料或無法讀取。")
+        st.info("尚無 CRM 資料或無法讀取 (可能是空的)。")
         if st.button("🔄 重試"):
             st.cache_data.clear()
             st.rerun()
@@ -144,6 +131,7 @@ def show(client, user_email, real_name, is_manager):
     with st.container(border=True):
         col1, col2 = st.columns([1, 2])
         
+        # --- 日期篩選 ---
         with col1:
             today = date.today()
             start_default = today.replace(day=1)
@@ -155,6 +143,7 @@ def show(client, user_email, real_name, is_manager):
                 key="crm_date_range"
             )
 
+        # --- 人員篩選 (權限控管 + 互斥邏輯) ---
         with col2:
             target_users = []
             
@@ -230,18 +219,12 @@ def show(client, user_email, real_name, is_manager):
         st.warning("請選擇完整的日期區間")
         return
 
-    # 【資安強化】權限二確
-    if not is_manager:
-        invalid_targets = [u for u in target_users if u != real_name]
-        if invalid_targets:
-            st.error("⛔ 安全警告：權限異常，您無法查看其他人的資料。")
-            logging.warning(f"SECURITY ALERT (CRM): User {real_name} tried to access {invalid_targets}")
-            return
-
     # 3. 資料過濾邏輯
+    # 步驟 A: 日期過濾
     mask_date = (df_original["拜訪日期_dt"] >= start_date) & (df_original["拜訪日期_dt"] <= end_date)
     df_filtered = df_original.loc[mask_date].copy()
 
+    # 步驟 B: 人員過濾
     mask_user = pd.Series([False] * len(df_filtered), index=df_filtered.index)
     if "填寫人" in df_filtered.columns:
         mask_user |= df_filtered["填寫人"].astype(str).isin(target_users)
@@ -250,8 +233,10 @@ def show(client, user_email, real_name, is_manager):
         
     df_filtered = df_filtered[mask_user]
     
+    # 步驟 C: 進階屬性過濾 (修正版：加入客戶名稱與模糊搜尋)
     if not df_filtered.empty:
         with st.expander("🔍 進階篩選 (客戶、產業、關鍵字)", expanded=False):
+            # 【修改 2】第一列：產業與通路 (類別型)
             r1_c1, r1_c2 = st.columns(2)
             with r1_c1:
                 all_industries = sorted(list(set([x for x in df_filtered["產業別"].unique() if x])))
@@ -260,8 +245,11 @@ def show(client, user_email, real_name, is_manager):
                 all_channels = sorted(list(set([x for x in df_filtered["通路商"].unique() if x])))
                 sel_channel = st.multiselect("通路商", options=all_channels)
 
+            # 【修改 3】第二列：客戶名稱、產品、模糊搜尋 (文字/搜尋型)
+            # 使用 vertical_alignment="bottom" 確保輸入框對齊
             r2_c1, r2_c2, r2_c3 = st.columns(3, vertical_alignment="bottom")
             with r2_c1:
+                # 動態取得當前範圍內的客戶名稱
                 all_clients = sorted(list(set([x for x in df_filtered["客戶名稱"].unique() if x])))
                 sel_client_name = st.multiselect("客戶名稱", options=all_clients, placeholder="選擇特定客戶...")
             with r2_c2:
@@ -269,6 +257,7 @@ def show(client, user_email, real_name, is_manager):
             with r2_c3:
                 sel_fuzzy_kw = st.text_input("模糊關鍵字搜尋", placeholder="搜尋客戶/目的/狀況/依賴...", help="同時搜尋：客戶名稱、工作內容、依賴事項、實際行程")
 
+            # 執行篩選
             if sel_industry:
                 df_filtered = df_filtered[df_filtered["產業別"].isin(sel_industry)]
             if sel_channel:
@@ -278,13 +267,17 @@ def show(client, user_email, real_name, is_manager):
             if sel_product_kw:
                 df_filtered = df_filtered[df_filtered["推廣產品"].astype(str).str.contains(sel_product_kw, case=False)]
             
+            # 【修改 4】模糊搜尋邏輯
             if sel_fuzzy_kw:
+                # 定義要搜尋的欄位 (確保欄位存在)
                 search_cols = ["客戶名稱", "工作內容", "依賴事項", "實際行程"]
                 valid_cols = [c for c in search_cols if c in df_filtered.columns]
                 
                 if valid_cols:
+                    # 建立一個全 False 的 mask
                     mask_fuzzy = pd.Series([False] * len(df_filtered), index=df_filtered.index)
                     for col in valid_cols:
+                        # 使用 OR (|) 邏輯串接各欄位的搜尋結果
                         mask_fuzzy |= df_filtered[col].astype(str).str.contains(sel_fuzzy_kw, case=False)
                     
                     df_filtered = df_filtered[mask_fuzzy]
@@ -364,7 +357,7 @@ def show(client, user_email, real_name, is_manager):
     st.download_button(
         label="📥 下載 CRM 報表 CSV",
         data=csv,
-        file_name=f"CRM商機報表_{actual_db_name}_{start_date}_{end_date}.csv",
+        file_name=f"CRM商機報表_{start_date}_{end_date}.csv",
         mime="text/csv"
     )
 
