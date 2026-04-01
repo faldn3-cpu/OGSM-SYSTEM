@@ -1,6 +1,5 @@
 import streamlit as st
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import os
 import bcrypt
 import pandas as pd
@@ -246,18 +245,19 @@ def get_system_boot_time():
     return get_tw_time()
 
 def get_client():
-    scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
     error_log = []
 
+    # 1. 嘗試讀取本機的 service_account.json
     if os.path.exists('service_account.json'):
         try:
-            creds = ServiceAccountCredentials.from_json_keyfile_name('service_account.json', scope)
-            return gspread.authorize(creds)
+            # 使用 gspread 內建的本機檔案驗證方法
+            return gspread.service_account(filename='service_account.json')
         except Exception as e:
             error_log.append(f"Local file error: {str(e)}")
     else:
         error_log.append("Local 'service_account.json' not found.")
 
+    # 2. 嘗試讀取 Streamlit Secrets (雲端部署環境)
     try:
         if "gcp_service_account" in st.secrets:
             try:
@@ -265,8 +265,8 @@ def get_client():
                 if "private_key" not in creds_dict:
                     error_log.append("Secrets found but 'private_key' is missing.")
                 else:
-                    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-                    return gspread.authorize(creds)
+                    # 使用 gspread 內建的字典格式驗證方法
+                    return gspread.service_account_from_dict(creds_dict)
             except Exception as inner_e:
                 error_log.append(f"Secrets parsing error: {str(inner_e)}")
         else:
