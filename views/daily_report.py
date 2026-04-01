@@ -323,22 +323,42 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
 #  新增函式：儲存至客戶關係表單
 # ==========================================
 def save_to_crm_sheet(client, crm_data):
-    """
-    【終極解法】不透過 gspread 寫入，改用 HTTP POST 模擬送出 Google 表單。
-    藉此觸發 Google 表單內部計數器，確保資料永遠按照順序寫入，不會互相擠壓。
-    """
-    # 這是你表單真正的 POST 接收端點
     url = "https://docs.google.com/forms/d/e/1FAIpQLSdb1oeYmCenAjvRjFzYfKVWkIBzW105wb2K-JTj4YgJCFwkJQ/formResponse"
     
-    # 將 Python 變數精準對應到 Google 表單的隱藏 ID
+    # 1. 處理特殊選項的字串差異 (Streamlit UI 與 Google 表單選項不一致)
+    action = crm_data.get("行動方案", "")
+    if "電話聯繫" in action:
+        action = "電話聯繫 & 報價事宜 & 其他"  # 強制轉換為 Google 表單的精確字眼
+
+    type_val = crm_data.get("客戶性質", "")
+    if "A客戶" in type_val and "大手" in type_val:
+        type_val = "A客戶 - 大手客戶 & 既有客戶"
+    if "D-A客戶" in type_val and "大手" in type_val:
+        type_val = "D-A客戶 - 經銷商 大手客戶 & 既有客戶"
+
+    industry_val = crm_data.get("產業別", "")
+    if "電子產業" in industry_val:
+        industry_val = "電子產業 (半導體產業 & PCB產業 & AI產業...)"
+    if "自動化設備" in industry_val:
+        industry_val = "自動化設備產業(工具機 & 輸送設備 & 廠房設備...)"
+    if "節能產業" in industry_val:
+        industry_val = "節能產業(風車 & 水泵 & 空調 & 工程案...)"
+    if "通路商" in industry_val:
+        industry_val = "通路商 (經銷商 & 二次店 & 上控...)"
+
+    # 2. 確保日期為 YYYY-MM-DD 格式
+    visit_date = crm_data.get("拜訪日期")
+    visit_date_str = visit_date.strftime("%Y-%m-%d") if hasattr(visit_date, 'strftime') else str(visit_date)
+
+    # 3. 組合 Payload
     payload = {
         "entry.96119068": crm_data.get("填寫人", ""),
         "entry.2111504476": crm_data.get("客戶名稱", ""),
         "entry.1357642524": crm_data.get("通路商", ""),
-        "entry.1714915871": crm_data.get("行動方案", ""),
-        "entry.934052072": crm_data.get("客戶性質", ""),
-        "entry.1451405577": crm_data.get("產業別", ""),
-        "entry.516181115": str(crm_data.get("拜訪日期", "")),  # 日期字串 YYYY-MM-DD
+        "entry.1714915871": action,                    # 寫入校正後的行動方案
+        "entry.934052072": type_val,                   # 寫入校正後的客戶性質
+        "entry.1451405577": industry_val,              # 寫入校正後的產業別
+        "entry.516181115": visit_date_str,             # 寫入校正後的日期字串
         "entry.783279195": crm_data.get("工作內容", ""),
         "entry.1781871147": crm_data.get("產出日期", ""),
         "entry.1117419766": crm_data.get("總金額", ""),
@@ -347,29 +367,24 @@ def save_to_crm_sheet(client, crm_data):
     }
 
     # 處理選填欄位
-    if crm_data.get("競爭通路"): 
-        payload["entry.1890292749"] = crm_data["競爭通路"]
-    if crm_data.get("流失取回"): 
-        payload["entry.152392267"] = crm_data["流失取回"]
-    if crm_data.get("依賴事項"): 
-        payload["entry.847639223"] = crm_data["依賴事項"]
+    if crm_data.get("競爭通路"): payload["entry.1890292749"] = crm_data["競爭通路"]
+    if crm_data.get("流失取回"): payload["entry.152392267"] = crm_data["流失取回"]
+    if crm_data.get("依賴事項"): payload["entry.847639223"] = crm_data["依賴事項"]
 
-    # 處理複選題 (requests 套件會自動將 List 轉換為多個相同的 key 發送)
-    if "推廣產品_list" in crm_data:
-        payload["entry.1642331636"] = crm_data["推廣產品_list"]
-    if "競爭品牌_list" in crm_data:
-        payload["entry.1280930959"] = crm_data["競爭品牌_list"]
+    # 處理複選題 (List)
+    if crm_data.get("推廣產品_list"): payload["entry.1642331636"] = crm_data["推廣產品_list"]
+    if crm_data.get("競爭品牌_list"): payload["entry.1280930959"] = crm_data["競爭品牌_list"]
 
     try:
-        # 發送 POST 請求模擬提交表單
         response = requests.post(url, data=payload)
         
-        # Google 表單成功提交會回傳 HTTP 200
         if response.status_code == 200:
             return True, "✅ 上傳成功！"
         else:
+            # 發生 400 錯誤時，將 Payload 印到終端機，方便我們找出哪個欄位漏了或是字錯了
             logging.error(f"Form Submit Failed. Status: {response.status_code}")
-            return False, f"上傳失敗，狀態碼: {response.status_code}"
+            print("❌ 造成 400 錯誤的 Payload:", payload) 
+            return False, f"上傳失敗 (400)：請檢查是否有必填欄位未填寫，或選項文字不符。"
             
     except Exception as e:
         logging.error(f"Form Submit Error: {str(e)}")
