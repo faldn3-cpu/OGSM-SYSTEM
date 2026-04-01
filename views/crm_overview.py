@@ -16,7 +16,7 @@ DIRECT_SALES_NAMES = [
     "曾仁君", "溫達仁", "楊家豪", "莊富丞", "謝瑞騏", "何宛茹", "張書偉"
 ]
 DISTRIBUTOR_SALES_NAMES = [
-    "張何達", "邱文輝", "葉仁豪"
+    "張何達", "周柏翰", "葉仁豪"
 ]
 OPT_ALL = "(1) 🟢 全員選取"
 OPT_DIRECT = "(2) 🔵 直賣全員"
@@ -61,8 +61,27 @@ def load_crm_data_cached(_client, db_name, sheet_name):
             
         headers = rows[0]
         data = rows[1:]
-        
-        df = pd.DataFrame(data, columns=headers)
+
+        # Google 表單有時某列欄數與標題不符（多或少），直接建 DataFrame 會爆
+        # 統一補齊或截斷每列，確保欄數與標題一致
+        n_cols = len(headers)
+        data_normalized = [
+            row[:n_cols] + [""] * (n_cols - len(row))
+            for row in data
+        ]
+
+        # 標題若有重複欄名（Google 表單常見），自動加後綴區分
+        seen = {}
+        unique_headers = []
+        for h in headers:
+            if h in seen:
+                seen[h] += 1
+                unique_headers.append(f"{h}_{seen[h]}")
+            else:
+                seen[h] = 0
+                unique_headers.append(h)
+
+        df = pd.DataFrame(data_normalized, columns=unique_headers)
         
         column_keywords = {
             "客戶名稱": "客戶名稱",
