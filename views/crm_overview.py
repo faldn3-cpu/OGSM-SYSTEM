@@ -16,7 +16,7 @@ DIRECT_SALES_NAMES = [
     "曾仁君", "溫達仁", "楊家豪", "莊富丞", "謝瑞騏", "何宛茹", "張書偉"
 ]
 DISTRIBUTOR_SALES_NAMES = [
-    "張何達", "邱文輝", "葉仁豪"
+    "張何達", "周柏翰", "葉仁豪"
 ]
 OPT_ALL = "(1) 🟢 全員選取"
 OPT_DIRECT = "(2) 🔵 直賣全員"
@@ -96,7 +96,10 @@ def load_crm_data_cached(_client, db_name, sheet_name):
         else:
             df["總金額_數值"] = 0.0
 
-        df.fillna("", inplace=True)
+        # 只對「非日期欄位」做填空，避免將 拜訪日期_dt 的 None 覆蓋成 ""
+        # 若 "" 和 datetime.date 混在同一欄，後續日期比較會出現型態錯誤
+        non_dt_cols = [c for c in df.columns if c != "拜訪日期_dt"]
+        df[non_dt_cols] = df[non_dt_cols].fillna("")
         return df
 
     except SpreadsheetNotFound:
@@ -239,7 +242,10 @@ def show(client, user_email, real_name, is_manager):
             return
 
     # 3. 資料過濾邏輯
-    mask_date = (df_original["拜訪日期_dt"] >= start_date) & (df_original["拜訪日期_dt"] <= end_date)
+    # 日期篩選：用 isinstance 確保只比較真正的 date 物件，空值自動排除
+    mask_date = df_original["拜訪日期_dt"].apply(
+        lambda x: isinstance(x, date) and start_date <= x <= end_date
+    )
     df_filtered = df_original.loc[mask_date].copy()
 
     mask_user = pd.Series([False] * len(df_filtered), index=df_filtered.index)
