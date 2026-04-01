@@ -422,7 +422,11 @@ def show(client, db_name, user_email, real_name, is_manager):
     fname = f"業務日報彙整_{start_date}_{end_date}.csv"
     
     export_df = final_df.copy()
-    export_df = export_df.applymap(sanitize_csv_field)
+    # pandas 2.1+ 將 applymap 改名為 map，以下寫法新舊版本皆相容
+    if hasattr(export_df, 'map') and callable(getattr(pd.DataFrame, 'map', None)):
+        export_df = export_df.map(sanitize_csv_field)
+    else:
+        export_df = export_df.applymap(sanitize_csv_field)
     
     csv = export_df.to_csv(index=False).encode('utf-8-sig')
     
