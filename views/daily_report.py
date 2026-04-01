@@ -327,9 +327,13 @@ def save_to_crm_sheet(client, crm_data):
     
     # --- 1. 客戶性質 (精準對應) ---
     type_val = crm_data.get("客戶性質", "")
-    if "(A)" in type_val or "A客戶" in type_val: type_val = "A客戶 - 大手客戶 & 既有客戶"
-    elif "(B)" in type_val or "B客戶" in type_val: type_val = "B客戶 - 前一年新成交"
-    elif "(C)" in type_val or "C客戶" in type_val: type_val = "C客戶 - 預計開發及今年新成交"
+    # 修正 D-A, D-B 判斷邏輯，避免被 A客戶 蓋掉
+    if "D-A" in type_val: type_val = "D-A客戶 - 經銷商 大手客戶 & 既有客戶"
+    elif "D-B" in type_val: type_val = "D-B客戶 - 經銷商 前一年新成交"
+    elif "D-C" in type_val: type_val = "D-C客戶 - 經銷商 預計開發及今年新成交"
+    elif "A客戶" in type_val or "(A)" in type_val: type_val = "A客戶 - 大手客戶 & 既有客戶"
+    elif "B客戶" in type_val or "(B)" in type_val: type_val = "B客戶 - 前一年新成交"
+    elif "C客戶" in type_val or "(C)" in type_val: type_val = "C客戶 - 預計開發及今年新成交"
 
     # --- 2. 行動方案 & 產業別 ---
     action = crm_data.get("行動方案", "")
@@ -358,20 +362,34 @@ def save_to_crm_sheet(client, crm_data):
         ("entry.1781871147", crm_data.get("產出日期", "")),
         ("entry.1117419766", str(crm_data.get("總金額", ""))),
         ("entry.1488606205", crm_data.get("實際行程")),
-        # ⚠️ 注意：如果 UI 傳入「曾維崧」，但表單沒有此選項，此處直接保留原值。
-        # 你必須去 Google 表單後台，在「客戶所屬」那一題加上「曾維崧」，否則依然會 400！
         ("entry.850004033", crm_data.get("客戶所屬")) 
     ]
 
-    # 加入選填
+    # --- 5. 處理流失取回 (自動翻譯為超長字串) ---
+    lost_rec = crm_data.get("流失取回", "")
+    if lost_rec and lost_rec != "無":
+        if "曾仁君" in lost_rec:
+            payload_list.append(("entry.152392267", "曾仁君 - 新林電機、新碩自動"))
+        elif "溫達仁" in lost_rec:
+            payload_list.append(("entry.152392267", "溫達仁 - 崇翌科技、台銨科技、全美自動、泓發機電、協易機械、鑫詮科技、迎傑機電、由田新技、祥侑企業、梭特科技"))
+        elif "楊家豪" in lost_rec:
+            payload_list.append(("entry.152392267", "楊家豪 - 順瀅企業、宇貫企業"))
+        elif "謝瑞騏" in lost_rec:
+            payload_list.append(("entry.152392267", "謝瑞騏 - 福星機電、德世達科、磊登自動、睿明科技、碩聯自動"))
+        elif "莊富丞" in lost_rec:
+            payload_list.append(("entry.152392267", "莊富丞 - 東佑達奈、叡億機械、理豐智動、東典科技"))
+        elif "張書偉" in lost_rec:
+            payload_list.append(("entry.152392267", "張書偉 - 鴻績工業、汎得自動、達詳自動、捷惠自動"))
+        else:
+            payload_list.append(("entry.152392267", lost_rec))
+
+    # 加入其他選填
     if crm_data.get("競爭通路"): payload_list.append(("entry.1890292749", crm_data["競爭通路"]))
-    if crm_data.get("流失取回"): payload_list.append(("entry.152392267", crm_data["流失取回"]))
     if crm_data.get("依賴事項"): payload_list.append(("entry.847639223", crm_data["依賴事項"]))
 
-    # --- 5. 處理推廣產品 (陣列防呆 + 全名翻譯) ---
+    # --- 6. 處理推廣產品 ---
     products = crm_data.get("推廣產品_list", [])
-    if isinstance(products, str): products = [products]  # 防呆：如果是字串，包裝成陣列
-    
+    if isinstance(products, str): products = [products]
     for p in products:
         if "士林品" in p: payload_list.append(("entry.1642331636", "士林品(變頻器、伺服、小型PLC、人機介面、溫控器、SD-INV)"))
         elif "三菱品" in p: payload_list.append(("entry.1642331636", "三菱品(變頻器、伺服、小型PLC、大型PLC、人機介面、運動控制器、機械手臂)"))
@@ -382,14 +400,13 @@ def save_to_crm_sheet(client, crm_data):
         elif "其他" in p: payload_list.append(("entry.1642331636", "其他(溫控器、警示燈)"))
         else: payload_list.append(("entry.1642331636", p))
 
-    # --- 6. 處理競爭品牌 (陣列防呆) ---
+    # --- 7. 處理競爭品牌 ---
     brands = crm_data.get("競爭品牌_list", [])
-    if isinstance(brands, str): brands = [brands] # 防呆：解決被拆成「台」「灣」「品」「牌」的問題
-    
+    if isinstance(brands, str): brands = [brands] 
     for b in brands:
         payload_list.append(("entry.1280930959", b))
 
-    # --- 7. 發送 POST ---
+    # --- 8. 發送 POST ---
     try:
         response = requests.post(url, data=payload_list)
         if response.status_code == 200:
@@ -397,7 +414,9 @@ def save_to_crm_sheet(client, crm_data):
         else:
             import streamlit as st
             logging.error(f"Form Submit Failed. Status: {response.status_code}")
-            st.error(f"🚨 送出失敗 (400)！請檢查「客戶所屬」({crm_data.get('客戶所屬')}) 是否有建在 Google 表單的選項中。")
+            # 拔掉假錯誤訊息，直接把真實資料印出來抓漏！
+            st.error(f"🚨 送出失敗 (400)！請檢查下方文字，一定有某個欄位的字跟 Google 表單裡的不一樣：")
+            st.json(payload_list)
             return False, f"上傳失敗 (400)"
             
     except Exception as e:
