@@ -325,66 +325,82 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
 def save_to_crm_sheet(client, crm_data):
     url = "https://docs.google.com/forms/d/e/1FAIpQLSdb1oeYmCenAjvRjFzYfKVWkIBzW105wb2K-JTj4YgJCFwkJQ/formResponse"
     
-    # 1. 處理特殊選項的字串差異 (Streamlit UI 與 Google 表單選項不一致)
+    # 🔴 1. 必填防呆檢查 (防止因為空值被 Google 拒絕)
+    required_fields = {
+        "填寫人": crm_data.get("填寫人"),
+        "客戶名稱": crm_data.get("客戶名稱"),
+        "通路商": crm_data.get("通路商"),
+        "行動方案": crm_data.get("行動方案"),
+        "客戶性質": crm_data.get("客戶性質"),
+        "產業別": crm_data.get("產業別"),
+        "工作內容": crm_data.get("工作內容"),
+        "實際行程": crm_data.get("實際行程"),
+        "客戶所屬": crm_data.get("客戶所屬"),
+        "推廣產品": crm_data.get("推廣產品_list"),
+        "競爭品牌": crm_data.get("競爭品牌_list"),
+    }
+    
+    for key, val in required_fields.items():
+        if not val or (isinstance(val, list) and len(val) == 0):
+            return False, f"⚠️ 錯誤：必填欄位『{key}』尚未填寫或勾選！"
+
+    # 🟡 2. 特殊字串精準校正 (自動修復常見的符號差異)
     action = crm_data.get("行動方案", "")
-    if "電話聯繫" in action:
-        action = "電話聯繫 & 報價事宜 & 其他"  # 強制轉換為 Google 表單的精確字眼
+    if "電話聯繫" in action: action = "電話聯繫 & 報價事宜 & 其他"
 
     type_val = crm_data.get("客戶性質", "")
-    if "A客戶" in type_val and "大手" in type_val:
-        type_val = "A客戶 - 大手客戶 & 既有客戶"
-    if "D-A客戶" in type_val and "大手" in type_val:
-        type_val = "D-A客戶 - 經銷商 大手客戶 & 既有客戶"
+    if "A客戶" in type_val and "大手" in type_val: type_val = "A客戶 - 大手客戶 & 既有客戶"
+    if "D-A客戶" in type_val and "大手" in type_val: type_val = "D-A客戶 - 經銷商 大手客戶 & 既有客戶"
 
     industry_val = crm_data.get("產業別", "")
-    if "電子產業" in industry_val:
-        industry_val = "電子產業 (半導體產業 & PCB產業 & AI產業...)"
-    if "自動化設備" in industry_val:
-        industry_val = "自動化設備產業(工具機 & 輸送設備 & 廠房設備...)"
-    if "節能產業" in industry_val:
-        industry_val = "節能產業(風車 & 水泵 & 空調 & 工程案...)"
-    if "通路商" in industry_val:
-        industry_val = "通路商 (經銷商 & 二次店 & 上控...)"
+    if "電子產業" in industry_val: industry_val = "電子產業 (半導體產業 & PCB產業 & AI產業...)"
+    if "自動化設備" in industry_val: industry_val = "自動化設備產業(工具機 & 輸送設備 & 廠房設備...)"
+    if "節能產業" in industry_val: industry_val = "節能產業(風車 & 水泵 & 空調 & 工程案...)"
+    if "通路商" in industry_val: industry_val = "通路商 (經銷商 & 二次店 & 上控...)"
 
-    # 2. 確保日期為 YYYY-MM-DD 格式
     visit_date = crm_data.get("拜訪日期")
     visit_date_str = visit_date.strftime("%Y-%m-%d") if hasattr(visit_date, 'strftime') else str(visit_date)
 
-    # 3. 組合 Payload
-    payload = {
-        "entry.96119068": crm_data.get("填寫人", ""),
-        "entry.2111504476": crm_data.get("客戶名稱", ""),
-        "entry.1357642524": crm_data.get("通路商", ""),
-        "entry.1714915871": action,                    # 寫入校正後的行動方案
-        "entry.934052072": type_val,                   # 寫入校正後的客戶性質
-        "entry.1451405577": industry_val,              # 寫入校正後的產業別
-        "entry.516181115": visit_date_str,             # 寫入校正後的日期字串
-        "entry.783279195": crm_data.get("工作內容", ""),
-        "entry.1781871147": crm_data.get("產出日期", ""),
-        "entry.1117419766": crm_data.get("總金額", ""),
-        "entry.1488606205": crm_data.get("實際行程", ""),
-        "entry.850004033": crm_data.get("客戶所屬", "")
-    }
+    # 🟢 3. 組合 Payload (使用 List of Tuples，這是處理 Google 複選題最安全的格式)
+    payload_list = [
+        ("entry.96119068", crm_data.get("填寫人")),
+        ("entry.2111504476", crm_data.get("客戶名稱")),
+        ("entry.1357642524", crm_data.get("通路商")),
+        ("entry.1714915871", action),
+        ("entry.934052072", type_val),
+        ("entry.1451405577", industry_val),
+        ("entry.516181115", visit_date_str),
+        ("entry.783279195", crm_data.get("工作內容")),
+        ("entry.1781871147", crm_data.get("產出日期", "")),
+        ("entry.1117419766", crm_data.get("總金額", "")),
+        ("entry.1488606205", crm_data.get("實際行程")),
+        ("entry.850004033", crm_data.get("客戶所屬"))
+    ]
 
-    # 處理選填欄位
-    if crm_data.get("競爭通路"): payload["entry.1890292749"] = crm_data["競爭通路"]
-    if crm_data.get("流失取回"): payload["entry.152392267"] = crm_data["流失取回"]
-    if crm_data.get("依賴事項"): payload["entry.847639223"] = crm_data["依賴事項"]
+    # 加入選填欄位
+    if crm_data.get("競爭通路"): payload_list.append(("entry.1890292749", crm_data["競爭通路"]))
+    if crm_data.get("流失取回"): payload_list.append(("entry.152392267", crm_data["流失取回"]))
+    if crm_data.get("依賴事項"): payload_list.append(("entry.847639223", crm_data["依賴事項"]))
 
-    # 處理複選題 (List)
-    if crm_data.get("推廣產品_list"): payload["entry.1642331636"] = crm_data["推廣產品_list"]
-    if crm_data.get("競爭品牌_list"): payload["entry.1280930959"] = crm_data["競爭品牌_list"]
+    # 展開複選題 (例如勾選兩項，就會變成兩個相同的 entry 送出)
+    for prod in crm_data.get("推廣產品_list", []):
+        payload_list.append(("entry.1642331636", prod))
+    for brand in crm_data.get("競爭品牌_list", []):
+        payload_list.append(("entry.1280930959", brand))
 
+    # 🔵 4. 發送請求與除錯顯示
     try:
-        response = requests.post(url, data=payload)
+        response = requests.post(url, data=payload_list)
         
         if response.status_code == 200:
             return True, "✅ 上傳成功！"
         else:
-            # 發生 400 錯誤時，將 Payload 印到終端機，方便我們找出哪個欄位漏了或是字錯了
+            # 如果還是 400，直接把我們送出的資料印在畫面上，一比對就知道哪裡有錯！
             logging.error(f"Form Submit Failed. Status: {response.status_code}")
-            print("❌ 造成 400 錯誤的 Payload:", payload) 
-            return False, f"上傳失敗 (400)：請檢查是否有必填欄位未填寫，或選項文字不符。"
+            import streamlit as st
+            st.error("🚨 送出失敗，請截圖下方資料，檢查哪一個文字跟表單選項不一樣：")
+            st.json(payload_list)
+            return False, f"上傳失敗 (400)"
             
     except Exception as e:
         logging.error(f"Form Submit Error: {str(e)}")
