@@ -226,7 +226,7 @@ def show(client, db_name, user_email, real_name, is_manager):
     current_email = str(user_email).lower()
     current_name = str(real_name)
     
-    if "welsong" in current_email :
+    if is_manager:  # ✅ 使用已有的角色參數
         if st.button("🔄 強制更新最新牌價 ", type="primary", use_container_width=True):
             with st.spinner("正在清除快取並重新下載資料..."):
                 if os.path.exists(CACHE_FILE):
