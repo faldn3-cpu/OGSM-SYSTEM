@@ -349,6 +349,15 @@ def save_to_crm_sheet(client, crm_data):
     visit_date = crm_data.get("拜訪日期")
     visit_date_str = visit_date.strftime("%Y-%m-%d") if hasattr(visit_date, 'strftime') else str(visit_date)
 
+    # --- ✨ 新增：處理產出日期 (翻譯縮寫) ✨ ---
+    est_date = crm_data.get("產出日期", "")
+    if "Q1" in est_date: est_date = "Q1(第一季)"
+    elif "Q2" in est_date: est_date = "Q2(第二季)"
+    elif "Q3" in est_date: est_date = "Q3(第三季)"
+    elif "Q4" in est_date: est_date = "Q4(第四季)"
+    elif "H1" in est_date: est_date = "H1(上半年)"
+    elif "H2" in est_date: est_date = "H2(下半年)"
+
     # --- 4. 基礎 Payload ---
     payload_list = [
         ("entry.96119068", crm_data.get("填寫人")),
@@ -359,11 +368,12 @@ def save_to_crm_sheet(client, crm_data):
         ("entry.1451405577", industry_val),
         ("entry.516181115", visit_date_str),
         ("entry.783279195", crm_data.get("工作內容")),
-        ("entry.1781871147", crm_data.get("產出日期", "")),
+        ("entry.1781871147", est_date),  # <--- ✨ 修改：這裡改放翻譯好的 est_date ✨
         ("entry.1117419766", str(crm_data.get("總金額", ""))),
         ("entry.1488606205", crm_data.get("實際行程")),
         ("entry.850004033", crm_data.get("客戶所屬")) 
     ]
+    
 
     # --- 5. 處理流失取回 (自動翻譯為超長字串) ---
     lost_rec = crm_data.get("流失取回", "")
