@@ -9,28 +9,31 @@ import logging
 import streamlit.components.v1 as components  # 引入元件庫以支援 JS 複製
 
 # ==========================================
-#  設定：客戶關係表單 (CRM) 選項與參數
+#  設定：客戶關係表單 (CRM) 精確選項清單
+#  (⚠️ 已與 Google 表單選項保持 100% 一致)
 # ==========================================
 CRM_DB_NAME = "客戶關係表單 (回覆)"
 
 # 通路商選項
 CRM_OPT_CHANNEL = ["直販", "二次店", "上控廠商", "經銷商", "其他"]
+
 # 競爭通路
 CRM_OPT_COMP_CHANNEL = ["無", "能麒", "上菱", "強力", "日遠", "耀毅", "三菱其他通路(瀚衛、惠控、雙象)", "羅昇", "友士", "碁電", "其他"]
 
-# 行動方案 (修正後：僅保留兩個選項)
-CRM_OPT_ACTION = ["出差到客戶端拜訪", "電話聯繫、報價事宜、其他"]
+# 行動方案
+CRM_OPT_ACTION = ["出差到客戶端拜訪", "電話聯繫 & 報價事宜 & 其他"]
 
 # 是否為流失客戶取回
 CRM_OPT_LOST_RECOVERY = [
     "無",
-    "曾仁君 - 新林電機", "曾仁君 - 新碩自動",
-    "溫達仁 - 崇翌科技", "溫達仁 - 台銨科技", "溫達仁 - 全美自動", "溫達仁 - 泓發機電", "溫達仁 - 協易機械", "溫達仁 - 鑫詮科技", "溫達仁 - 迎傑機電", "溫達仁 - 由田新技", "溫達仁 - 祥侑企業", "溫達仁 - 梭特科技",
-    "楊家豪 - 順瀅企業", "楊家豪 - 宇貫企業",
-    "謝瑞騏 - 福星機電", "謝瑞騏 - 德世達科", "謝瑞騏 - 磊登自動", "謝瑞騏 - 睿明科技", "謝瑞騏 - 碩聯自動",
-    "莊富丞 - 東佑達奈", "莊富丞 - 叡億機械", "莊富丞 - 理豐智動", "莊富丞 - 東典科技",
-    "張書偉 - 鴻績工業", "張書偉 - 汎得自動", "張書偉 - 達詳自動", "張書偉 - 捷惠自動", "張書偉 - 威光自動"
+    "曾仁君 - 新林電機、新碩自動",
+    "溫達仁 - 崇翌科技、台銨科技、全美自動、泓發機電、協易機械、鑫詮科技、迎傑機電、由田新技、祥侑企業、梭特科技",
+    "楊家豪 - 順瀅企業、宇貫企業",
+    "謝瑞騏 - 福星機電、德世達科、磊登自動、睿明科技、碩聯自動",
+    "莊富丞 - 東佑達奈、叡億機械、理豐智動、東典科技",
+    "張書偉 - 鴻績工業、汎得自動、達詳自動、捷惠自動"
 ]
+
 # 產業別
 CRM_OPT_INDUSTRY = [
     "電子產業 (半導體產業 & PCB產業 & AI產業...)", 
@@ -40,18 +43,30 @@ CRM_OPT_INDUSTRY = [
     "盤廠 & 機械廠", 
     "其他"
 ]
+
 # 販售或推廣產品
-CRM_OPT_PRODUCTS = ["士林品", "三菱品", "松下品", "開關類", "太陽能", "其他"]
+CRM_OPT_PRODUCTS = [
+    "士林品(變頻器、伺服、小型PLC、人機介面、溫控器、SD-INV)",
+    "三菱品(變頻器、伺服、小型PLC、大型PLC、人機介面、運動控制器、機械手臂)",
+    "松下品(感測器、雷射雕刻機)、IDEC、台灣氣立CHELIC",
+    "減速機(主推Nidec、利茗、松品)",
+    "開關類(士林品牌)",
+    "太陽能",
+    "其他(溫控器、警示燈)"
+]
+
 # 預計產出日期
 CRM_OPT_EST_DATE = [
     "1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月",
-    "Q1", "Q2", "Q3", "Q4", "H1", "H2"
+    "Q1(第一季)", "Q2(第二季)", "Q3(第三季)", "Q4(第四季)", "H1(上半年)", "H2(下半年)", "明年"
 ]
+
 # 競爭品牌
 CRM_OPT_COMP_BRAND = ["台灣品牌", "日系品牌", "歐系品牌", "其他品牌"]
+
 # 客戶所屬
 CRM_OPT_OWNER = [
-    "張何達", "曾仁君", "溫達仁", "楊家豪", "莊富丞", "謝瑞騏", "何宛茹", "張書偉", "邱文輝", "葉仁豪", "其他"
+    "張何達", "曾仁君", "邱文輝", "葉仁豪", "溫達仁", "楊家豪", "莊富丞", "謝瑞騏", "何宛茹", "張書偉"
 ]
 
 # ==========================================
@@ -319,104 +334,70 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
         logging.error(f"Save failed: {e}")
         return False, str(e)
 
+
 # ==========================================
-#  新增函式：儲存至客戶關係表單
+#  陣列安全過濾器
+# ==========================================
+def ensure_list(data):
+    """確保傳入的資料絕對是 List 格式，防止字串被拆分成單一字母送出"""
+    if not data: 
+        return []
+    if isinstance(data, list): 
+        return data
+    if isinstance(data, str):
+        return [x.strip() for x in data.split(",")] if "," in data else [data]
+    return list(data)
+
+
+# ==========================================
+#  儲存至客戶關係表單 (HTTP POST 版)
 # ==========================================
 def save_to_crm_sheet(client, crm_data):
     url = "https://docs.google.com/forms/d/e/1FAIpQLSdb1oeYmCenAjvRjFzYfKVWkIBzW105wb2K-JTj4YgJCFwkJQ/formResponse"
     
-    # --- 1. 客戶性質 (精準對應) ---
-    type_val = crm_data.get("客戶性質", "")
-    # 修正 D-A, D-B 判斷邏輯，避免被 A客戶 蓋掉
-    if "D-A" in type_val: type_val = "D-A客戶 - 經銷商 大手客戶 & 既有客戶"
-    elif "D-B" in type_val: type_val = "D-B客戶 - 經銷商 前一年新成交"
-    elif "D-C" in type_val: type_val = "D-C客戶 - 經銷商 預計開發及今年新成交"
-    elif "A客戶" in type_val or "(A)" in type_val: type_val = "A客戶 - 大手客戶 & 既有客戶"
-    elif "B客戶" in type_val or "(B)" in type_val: type_val = "B客戶 - 前一年新成交"
-    elif "C客戶" in type_val or "(C)" in type_val: type_val = "C客戶 - 預計開發及今年新成交"
-
-    # --- 2. 行動方案 & 產業別 ---
-    action = crm_data.get("行動方案", "")
-    if "電話聯繫" in action: action = "電話聯繫 & 報價事宜 & 其他"
-
-    industry_val = crm_data.get("產業別", "")
-    if "電子產業" in industry_val: industry_val = "電子產業 (半導體產業 & PCB產業 & AI產業...)"
-    elif "自動化設備" in industry_val: industry_val = "自動化設備產業(工具機 & 輸送設備 & 廠房設備...)"
-    elif "節能產業" in industry_val: industry_val = "節能產業(風車 & 水泵 & 空調 & 工程案...)"
-    elif "通路商" in industry_val: industry_val = "通路商 (經銷商 & 二次店 & 上控...)"
-
-    # --- 3. 處理日期 ---
+    # 1. 處理日期格式 (Google 只吃 YYYY-MM-DD)
     visit_date = crm_data.get("拜訪日期")
     visit_date_str = visit_date.strftime("%Y-%m-%d") if hasattr(visit_date, 'strftime') else str(visit_date)
 
-    # --- ✨ 新增：處理產出日期 (翻譯縮寫) ✨ ---
-    est_date = crm_data.get("產出日期", "")
-    if "Q1" in est_date: est_date = "Q1(第一季)"
-    elif "Q2" in est_date: est_date = "Q2(第二季)"
-    elif "Q3" in est_date: est_date = "Q3(第三季)"
-    elif "Q4" in est_date: est_date = "Q4(第四季)"
-    elif "H1" in est_date: est_date = "H1(上半年)"
-    elif "H2" in est_date: est_date = "H2(下半年)"
-
-    # --- 4. 基礎 Payload ---
+    # 2. 組合基礎 Payload (因為 UI 已全對齊表單選項，故直接取值即可)
     payload_list = [
         ("entry.96119068", crm_data.get("填寫人")),
         ("entry.2111504476", crm_data.get("客戶名稱")),
         ("entry.1357642524", crm_data.get("通路商")),
-        ("entry.1714915871", action),
-        ("entry.934052072", type_val),
-        ("entry.1451405577", industry_val),
+        ("entry.1714915871", crm_data.get("行動方案")),
+        ("entry.934052072", crm_data.get("客戶性質")),
+        ("entry.1451405577", crm_data.get("產業別")),
         ("entry.516181115", visit_date_str),
         ("entry.783279195", crm_data.get("工作內容")),
-        ("entry.1781871147", est_date),  # <--- ✨ 修改：這裡改放翻譯好的 est_date ✨
+        ("entry.1781871147", crm_data.get("產出日期", "")),
         ("entry.1117419766", str(crm_data.get("總金額", ""))),
         ("entry.1488606205", crm_data.get("實際行程")),
         ("entry.850004033", crm_data.get("客戶所屬")) 
     ]
-    
 
-    # --- 5. 處理流失取回 (自動翻譯為超長字串) ---
+    # 3. 處理選填欄位
     lost_rec = crm_data.get("流失取回", "")
     if lost_rec and lost_rec != "無":
-        if "曾仁君" in lost_rec:
-            payload_list.append(("entry.152392267", "曾仁君 - 新林電機、新碩自動"))
-        elif "溫達仁" in lost_rec:
-            payload_list.append(("entry.152392267", "溫達仁 - 崇翌科技、台銨科技、全美自動、泓發機電、協易機械、鑫詮科技、迎傑機電、由田新技、祥侑企業、梭特科技"))
-        elif "楊家豪" in lost_rec:
-            payload_list.append(("entry.152392267", "楊家豪 - 順瀅企業、宇貫企業"))
-        elif "謝瑞騏" in lost_rec:
-            payload_list.append(("entry.152392267", "謝瑞騏 - 福星機電、德世達科、磊登自動、睿明科技、碩聯自動"))
-        elif "莊富丞" in lost_rec:
-            payload_list.append(("entry.152392267", "莊富丞 - 東佑達奈、叡億機械、理豐智動、東典科技"))
-        elif "張書偉" in lost_rec:
-            payload_list.append(("entry.152392267", "張書偉 - 鴻績工業、汎得自動、達詳自動、捷惠自動"))
-        else:
-            payload_list.append(("entry.152392267", lost_rec))
+        payload_list.append(("entry.152392267", lost_rec))
 
-    # 加入其他選填
-    if crm_data.get("競爭通路"): payload_list.append(("entry.1890292749", crm_data["競爭通路"]))
-    if crm_data.get("依賴事項"): payload_list.append(("entry.847639223", crm_data["依賴事項"]))
+    comp_chan = crm_data.get("競爭通路", "")
+    if comp_chan and comp_chan != "無": 
+        payload_list.append(("entry.1890292749", comp_chan))
+        
+    dependency = crm_data.get("依賴事項", "")
+    if dependency: 
+        payload_list.append(("entry.847639223", dependency))
 
-    # --- 6. 處理推廣產品 ---
-    products = crm_data.get("推廣產品_list", [])
-    if isinstance(products, str): products = [products]
-    for p in products:
-        if "士林品" in p: payload_list.append(("entry.1642331636", "士林品(變頻器、伺服、小型PLC、人機介面、溫控器、SD-INV)"))
-        elif "三菱品" in p: payload_list.append(("entry.1642331636", "三菱品(變頻器、伺服、小型PLC、大型PLC、人機介面、運動控制器、機械手臂)"))
-        elif "松下品" in p: payload_list.append(("entry.1642331636", "松下品(感測器、雷射雕刻機)、IDEC、台灣氣立CHELIC"))
-        elif "減速機" in p: payload_list.append(("entry.1642331636", "減速機(主推Nidec、利茗、松品)"))
-        elif "開關類" in p: payload_list.append(("entry.1642331636", "開關類(士林品牌)"))
-        elif "太陽能" in p: payload_list.append(("entry.1642331636", "太陽能"))
-        elif "其他" in p: payload_list.append(("entry.1642331636", "其他(溫控器、警示燈)"))
-        else: payload_list.append(("entry.1642331636", p))
+    # 4. 處理複選題 (安全展開為多個 entry)
+    safe_products = ensure_list(crm_data.get("推廣產品_list"))
+    safe_brands = ensure_list(crm_data.get("競爭品牌_list"))
 
-    # --- 7. 處理競爭品牌 ---
-    brands = crm_data.get("競爭品牌_list", [])
-    if isinstance(brands, str): brands = [brands] 
-    for b in brands:
+    for p in safe_products:
+        payload_list.append(("entry.1642331636", p))
+    for b in safe_brands:
         payload_list.append(("entry.1280930959", b))
 
-    # --- 8. 發送 POST ---
+    # 5. 發送 POST
     try:
         response = requests.post(url, data=payload_list)
         if response.status_code == 200:
@@ -424,9 +405,8 @@ def save_to_crm_sheet(client, crm_data):
         else:
             import streamlit as st
             logging.error(f"Form Submit Failed. Status: {response.status_code}")
-            # 拔掉假錯誤訊息，直接把真實資料印出來抓漏！
-            st.error(f"🚨 送出失敗 (400)！請檢查下方文字，一定有某個欄位的字跟 Google 表單裡的不一樣：")
-            st.json(payload_list)
+            st.error(f"🚨 送出失敗 (400)！請檢查下方文字是否與 Google 表單選項有出入：")
+            st.json(payload_list) # 終極抓漏保險
             return False, f"上傳失敗 (400)"
             
     except Exception as e:
@@ -861,7 +841,8 @@ def show(client, db_name, user_email, real_name):
                 
                 c1, c2 = st.columns(2)
                 with c1:
-                    f_type = st.text_input("客戶性質 (自動帶入)", value=str(row_data.get("客戶分類", "")), disabled=True)
+                    # 這裡抓取自訂義的性質分類(A, B, C)，在送出時會在 save_to_crm_sheet 由我們自動修正
+                    f_type = st.selectbox("客戶性質 (自動抓取)", options=["A客戶 - 大手客戶 & 既有客戶", "B客戶 - 前一年新成交", "C客戶 - 預計開發及今年新成交", "D-A客戶 - 經銷商 大手客戶 & 既有客戶", "D-B客戶 - 經銷商 前一年新成交", "D-C客戶 - 經銷商 預計開發及今年新成交"], index=0)
                 with c2:
                     f_content = st.text_area("拜訪目的/案件/設備", value=str(row_data.get("工作內容", "")), height=68)
                     f_status_desc = st.text_area("案件狀況說明", value=str(row_data.get("實際行程", "")), height=68, help="對應：實際行程")
@@ -871,7 +852,6 @@ def show(client, db_name, user_email, real_name):
 
                 col_a, col_b = st.columns(2)
                 with col_a:
-                    # 【修正】預設為填寫人 (若在清單中)
                     default_owner_idx = 0
                     if real_name in CRM_OPT_OWNER:
                         default_owner_idx = CRM_OPT_OWNER.index(real_name)
@@ -887,13 +867,14 @@ def show(client, db_name, user_email, real_name):
                     f_est_date = st.selectbox("案件預計產出日期", options=CRM_OPT_EST_DATE)
                     f_comp_brand = st.selectbox("競爭品牌", options=CRM_OPT_COMP_BRAND)
 
-                # 自動判斷流失客戶
+                # 自動判斷流失客戶 (加入防呆模糊比對)
                 current_client_name = str(row_data.get("客戶名稱", "")).strip()
                 default_lost_idx = 0
                 if current_client_name and current_client_name != "-":
-                    expected_opt = f"{real_name} - {current_client_name}"
-                    if expected_opt in CRM_OPT_LOST_RECOVERY:
-                        default_lost_idx = CRM_OPT_LOST_RECOVERY.index(expected_opt)
+                    for idx, opt in enumerate(CRM_OPT_LOST_RECOVERY):
+                        if real_name in opt and current_client_name in opt:
+                            default_lost_idx = idx
+                            break
 
                 f_lost_rec = st.selectbox("是否為流失客戶取回 (選填)", options=CRM_OPT_LOST_RECOVERY, index=default_lost_idx)
                 
@@ -916,7 +897,6 @@ def show(client, db_name, user_email, real_name):
                 st.rerun()
 
             if submitted:
-                # 【修改】為了配合 Google 表單的 HTTP POST，保留原始的 List 格式
                 crm_data = {
                     "填寫人": f_user,
                     "客戶名稱": f_client,
@@ -927,13 +907,13 @@ def show(client, db_name, user_email, real_name):
                     "流失取回": f_lost_rec if f_lost_rec != "無" else "",
                     "產業別": f_industry,
                     "拜訪日期": f_date,
-                    "推廣產品_list": f_products,     # <--- 修改：不再使用 join，直接傳 List
+                    "推廣產品_list": f_products,
                     "工作內容": f_content,
                     "產出日期": f_est_date,
                     "總金額": str(f_amount),
                     "依賴事項": f_dependency,
                     "實際行程": f_status_desc,
-                    "競爭品牌_list": f_comp_brand,   # <--- 修改：直接傳 List
+                    "競爭品牌_list": f_comp_brand,
                     "客戶所屬": f_owner
                 }
                 
@@ -945,5 +925,4 @@ def show(client, db_name, user_email, real_name):
                         st.session_state.dr_sync_data = None
                         time.sleep(1)
                         st.rerun()
-                    else:
-                        st.error(msg)
+                    # 失敗的話，原頁面會保留，並由 save_to_crm_sheet 顯示紅色除錯方塊
