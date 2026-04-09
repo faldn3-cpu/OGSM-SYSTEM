@@ -139,8 +139,6 @@ def show(client, user_email, real_name, is_manager):
     db_options = {
         f"🟢 [當前] {current_year} 年度 (主庫)": CRM_DB_NAME,
         f"🗄️ [歷史] {current_year - 1} 年度": f"{CRM_DB_NAME}_歷史庫_{current_year - 1}",
-        f"🗄️ [歷史] {current_year - 2} 年度": f"{CRM_DB_NAME}_歷史庫_{current_year - 2}",
-        f"🗄️ [歷史] {current_year - 3} 年度": f"{CRM_DB_NAME}_歷史庫_{current_year - 3}"
     }
     selected_db_label = st.selectbox("📂 選擇查詢庫 (年度)", options=list(db_options.keys()))
     actual_db_name = db_options[selected_db_label]
