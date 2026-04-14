@@ -67,34 +67,56 @@ if not st.session_state.https_checked:
 #  CSS 樣式設定
 # ==========================================
 # 找到 st.markdown("""<style>...""") 區塊，在裡面加入手機專屬 CSS
+# --- app.py 修改建議 ---
+
+# 在原本的 CSS 區塊加入「App 瓷磚按鈕」樣式
 st.markdown("""
 <style>
-/* 📱 手機版專屬優化 */
-@media (max-width: 768px) {
-    .block-container { padding: 1rem !important; }
-    .stButton > button { width: 100% !important; height: 50px !important; margin-bottom: 8px !important; }
-    input, select, textarea { font-size: 16px !important; }
-}
-
-/* 側邊欄按鈕化美化 */
-div[role="radiogroup"] label {
-    padding: 12px 15px !important;
-    margin-bottom: 8px !important;
-    border-radius: 10px !important;
-    border: 1px solid rgba(128, 128, 128, 0.1) !important;
-}
+    /* 讓 Streamlit 原本的按鈕變高變大，像 App 瓷磚 */
+    div.stButton > button {
+        height: 120px !important;
+        font-size: 20px !important;
+        border-radius: 15px !important;
+        flex-direction: column !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        line-height: 1.5 !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# 找到頁面名稱清單，加上圖標
-pages = [
-    "📝 OGSM日報系統", 
-    "💰 牌價表查詢系統", 
-    "📊 OGSM日報總覽", 
-    "📈 CRM 商機總覽", 
-    "🔑 修改密碼", 
-    "👋 登出系統"
-]
+# 導覽邏輯：使用 session_state 控制頁面
+if 'current_page' not in st.session_state:
+    st.session_state.current_page = "首頁"
+
+def nav_to(page_name):
+    st.session_state.current_page = page_name
+    st.rerun()
+
+# --- 主程式區 ---
+if st.session_state.current_page == "首頁":
+    st.title("🚀 行動業務管理系統")
+    st.caption(f"你好，{real_name}。請選擇功能項目：")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📝\nOGSM 日報", use_container_width=True): nav_to("📝 OGSM日報系統")
+        if st.button("📊\n日報總覽", use_container_width=True): nav_to("📊 OGSM日報總覽")
+    with col2:
+        if st.button("📈\nCRM 商機", use_container_width=True): nav_to("📈 CRM 商機總覽")
+        if st.button("💰\n牌價查詢", use_container_width=True): nav_to("💰 牌價表查詢系統")
+    
+    st.markdown("---")
+    if st.button("👋 登出系統", use_container_width=True):
+        st.session_state.authenticated = False
+        st.rerun()
+else:
+    # 每個子頁面最上方補一個返回按鈕
+    if st.button("🏠 返回首頁", use_container_width=True):
+        nav_to("首頁")
+    
+    # 根據 st.session_state.current_page 載入對應模組 (原本的 if/elif 邏輯)
 
 # ==========================================
 #  雲端資安設定 & 全域變數
