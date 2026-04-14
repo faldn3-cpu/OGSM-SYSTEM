@@ -134,25 +134,46 @@ def load_crm_data_cached(_client, db_name, sheet_name):
 def show(client, user_email, real_name, is_manager):
     st.title("📊 CRM 商機總覽")
 
-    # === 0. 資料庫年份選擇 (歷史歸檔機制) ===
+# === 0. 資料庫年份/分頁選擇 (支援跨年度合併) ===
     current_year = date.today().year
-    db_options = {
-        f"🟢 [當前] {current_year} 年度 (主庫)": CRM_DB_NAME,
-        f"🗄️ [歷史] {current_year - 1} 年度": f"{CRM_DB_NAME}_歷史庫_{current_year - 1}",
-    }
-    selected_db_label = st.selectbox("📂 選擇查詢庫 (年度)", options=list(db_options.keys()))
-    actual_db_name = db_options[selected_db_label]
-
-    # 1. 讀取資料 (改為傳入實際的 actual_db_name)
-    df_original = load_crm_data_cached(client, actual_db_name, CRM_SHEET_NAME)
     
-    if df_original.empty:
-        st.info("此資料庫尚無 CRM 資料或無法讀取。")
+    # 僅保留有資料的分頁
+    sheet_options = {
+        f"🟢 [當前] {current_year} 年度 (主庫)": CRM_SHEET_NAME,
+        f"🗄️ [歷史] 2025 年度": "20251231"
+    }
+    
+    # 【修改 1】改為 st.multiselect 允許複選，並預設勾選當前年度
+    default_selection = [f"🟢 [當前] {current_year} 年度 (主庫)"]
+    selected_sheet_labels = st.multiselect(
+        "📂 選擇查詢庫 (年度/分頁，可複選)", 
+        options=list(sheet_options.keys()),
+        default=default_selection
+    )
+
+    if not selected_sheet_labels:
+        st.warning("⚠️ 請至少選擇一個年度的資料庫進行查詢。")
+        return
+
+    # 【修改 2】逐一讀取選中的年度，並合併成一個大資料表
+    all_dfs = []
+    with st.spinner("正在載入並合併資料..."):
+        for label in selected_sheet_labels:
+            actual_sheet_name = sheet_options[label]
+            df_part = load_crm_data_cached(client, CRM_DB_NAME, actual_sheet_name)
+            if not df_part.empty:
+                all_dfs.append(df_part)
+                
+    if not all_dfs:
+        st.info("所選的資料庫尚無 CRM 資料或無法讀取。")
         if st.button("🔄 重試"):
             st.cache_data.clear()
             st.rerun()
         return
-
+        
+    # 使用 pandas 的 concat 函數將多個年度資料無縫接軌
+    df_original = pd.concat(all_dfs, ignore_index=True)
+    
     required_cols = ["填寫人", "客戶所屬", "產業別", "通路商", "推廣產品", "客戶名稱", "總金額"]
     missing_cols = [c for c in required_cols if c not in df_original.columns]
     
@@ -160,8 +181,18 @@ def show(client, user_email, real_name, is_manager):
         st.error(f"❌ 資料表處理後仍缺少關鍵欄位: {', '.join(missing_cols)}")
         return
 
-    # 2. 側邊/上方篩選器
+   # 2. 側邊/上方篩選器
     with st.container(border=True):
+        # 🌟 【新增】將關鍵字搜尋獨立拉到最上方，作為最高優先級
+        sel_fuzzy_kw = st.text_input(
+            "🔍 全域關鍵字快搜 (最高優先)", 
+            placeholder="輸入客戶名稱、目的、狀況... (有輸入關鍵字時，直接搜尋全年度全庫資料，無視下方日期限制)",
+            help="搜尋範圍包含：客戶名稱、工作內容、依賴事項、實際行程"
+        )
+        
+        st.markdown("---")
+        st.caption("📅 一般條件篩選 (無輸入關鍵字時，需設定以下條件)")
+        
         col1, col2 = st.columns([1, 2])
         
         with col1:
@@ -170,7 +201,7 @@ def show(client, user_email, real_name, is_manager):
             end_default = today
             
             date_range = st.date_input(
-                "📅 選擇拜訪日期區間", 
+                "選擇拜訪日期區間", 
                 (start_default, end_default),
                 key="crm_date_range"
             )
@@ -212,7 +243,7 @@ def show(client, user_email, real_name, is_manager):
                     st.session_state.crm_sales_prev = new_selection
 
                 st.multiselect(
-                    "👥 選擇業務員 (篩選 填寫人 或 客戶所屬)",
+                    "選擇業務員 (篩選 填寫人 或 客戶所屬)",
                     options=menu_options,
                     key="crm_sales_select",
                     on_change=on_selection_change,
@@ -237,53 +268,79 @@ def show(client, user_email, real_name, is_manager):
                 target_users = list(final_target_set)
                 
             else:
-                st.text_input("👤 查看對象", value=f"{real_name} (權限鎖定)", disabled=True)
+                st.text_input("查看對象", value=f"{real_name} (權限鎖定)", disabled=True)
                 target_users = [real_name]
 
-    if not target_users:
-        st.info("👆 請在上方選擇「查看對象」以開始查詢 (支援複選或群組)。")
-        return
 
-    if isinstance(date_range, tuple) and len(date_range) == 2:
-        start_date, end_date = date_range
+    # 3. 資料過濾邏輯 (雙模式切換)
+    df_filtered = df_original.copy()
+    is_global_search = bool(sel_fuzzy_kw.strip())
+
+    if is_global_search:
+        # ==========================================
+        # [模式 A] 全域快搜模式 (有關鍵字)
+        # ==========================================
+        search_cols = ["客戶名稱", "工作內容", "依賴事項", "實際行程"]
+        valid_cols = [c for c in search_cols if c in df_filtered.columns]
+        
+        if valid_cols:
+            mask_fuzzy = pd.Series([False] * len(df_filtered), index=df_filtered.index)
+            for col in valid_cols:
+                mask_fuzzy |= df_filtered[col].astype(str).str.contains(sel_fuzzy_kw, case=False)
+            df_filtered = df_filtered[mask_fuzzy]
+            
+        # 權限二確防護：即使全域搜尋，一般業務依然只能看自己的資料
+        if not is_manager:
+            mask_user = pd.Series([False] * len(df_filtered), index=df_filtered.index)
+            if "填寫人" in df_filtered.columns: mask_user |= df_filtered["填寫人"].astype(str) == real_name
+            if "客戶所屬" in df_filtered.columns: mask_user |= df_filtered["客戶所屬"].astype(str) == real_name
+            df_filtered = df_filtered[mask_user]
+
     else:
-        st.warning("請選擇完整的日期區間")
-        return
-
-    # 【資安強化】權限二確
-    if not is_manager:
-        invalid_targets = [u for u in target_users if u != real_name]
-        if invalid_targets:
-            st.error("⛔ 安全警告：權限異常，您無法查看其他人的資料。")
-            logging.warning(f"SECURITY ALERT (CRM): User {real_name} tried to access {invalid_targets}")
+        # ==========================================
+        # [模式 B] 一般篩選模式 (無關鍵字)
+        # ==========================================
+        if not target_users:
+            st.info("👆 請在最上方輸入「關鍵字」直接搜尋全庫，或選擇「查看對象」進行區間篩選。")
             return
 
-    # 3. 資料過濾邏輯
-    # 日期篩選：pd.NaT 在部分 pandas 版本會通過 isinstance(x, date) 但比較時爆炸
-    # 加上 pd.isnull() 雙重防護，確保 NaT / None / 空字串全部排除
-    def safe_date_in_range(x):
-        try:
-            if x is None or pd.isnull(x):
-                return False
-            if not isinstance(x, date):
-                return False
-            return start_date <= x <= end_date
-        except Exception:
-            return False
+        if not (isinstance(date_range, tuple) and len(date_range) == 2):
+            st.warning("請選擇完整的日期區間")
+            return
 
-    mask_date = df_original["拜訪日期_dt"].apply(safe_date_in_range)
-    df_filtered = df_original.loc[mask_date].copy()
+        # 權限二確
+        if not is_manager:
+            invalid_targets = [u for u in target_users if u != real_name]
+            if invalid_targets:
+                st.error("⛔ 安全警告：權限異常，您無法查看其他人的資料。")
+                logging.warning(f"SECURITY ALERT (CRM): User {real_name} tried to access {invalid_targets}")
+                return
 
-    mask_user = pd.Series([False] * len(df_filtered), index=df_filtered.index)
-    if "填寫人" in df_filtered.columns:
-        mask_user |= df_filtered["填寫人"].astype(str).isin(target_users)
-    if "客戶所屬" in df_filtered.columns:
-        mask_user |= df_filtered["客戶所屬"].astype(str).isin(target_users)
-        
-    df_filtered = df_filtered[mask_user]
-    
+        # 篩選日期
+        start_date, end_date = date_range
+        def safe_date_in_range(x):
+            try:
+                if x is None or pd.isnull(x): return False
+                if not isinstance(x, date): return False
+                return start_date <= x <= end_date
+            except Exception: return False
+
+        mask_date = df_filtered["拜訪日期_dt"].apply(safe_date_in_range)
+        df_filtered = df_filtered.loc[mask_date]
+
+        # 篩選人員
+        mask_user = pd.Series([False] * len(df_filtered), index=df_filtered.index)
+        if "填寫人" in df_filtered.columns:
+            mask_user |= df_filtered["填寫人"].astype(str).isin(target_users)
+        if "客戶所屬" in df_filtered.columns:
+            mask_user |= df_filtered["客戶所屬"].astype(str).isin(target_users)
+            
+        df_filtered = df_filtered[mask_user]
+
+
+    # 4. 進階下拉篩選 (保留精準欄位，移除模糊搜尋)
     if not df_filtered.empty:
-        with st.expander("🔍 進階篩選 (客戶、產業、關鍵字)", expanded=False):
+        with st.expander("🔍 進階下拉篩選 (客戶、產業、通路、產品)", expanded=False):
             r1_c1, r1_c2 = st.columns(2)
             with r1_c1:
                 all_industries = sorted(list(set([x for x in df_filtered["產業別"].unique() if x])))
@@ -292,14 +349,12 @@ def show(client, user_email, real_name, is_manager):
                 all_channels = sorted(list(set([x for x in df_filtered["通路商"].unique() if x])))
                 sel_channel = st.multiselect("通路商", options=all_channels)
 
-            r2_c1, r2_c2, r2_c3 = st.columns(3, vertical_alignment="bottom")
+            r2_c1, r2_c2 = st.columns(2)
             with r2_c1:
                 all_clients = sorted(list(set([x for x in df_filtered["客戶名稱"].unique() if x])))
                 sel_client_name = st.multiselect("客戶名稱", options=all_clients, placeholder="選擇特定客戶...")
             with r2_c2:
                 sel_product_kw = st.text_input("產品關鍵字", placeholder="例如: 士林", help="篩選「推廣產品」欄位")
-            with r2_c3:
-                sel_fuzzy_kw = st.text_input("模糊關鍵字搜尋", placeholder="搜尋客戶/目的/狀況/依賴...", help="同時搜尋：客戶名稱、工作內容、依賴事項、實際行程")
 
             if sel_industry:
                 df_filtered = df_filtered[df_filtered["產業別"].isin(sel_industry)]
@@ -309,17 +364,8 @@ def show(client, user_email, real_name, is_manager):
                 df_filtered = df_filtered[df_filtered["客戶名稱"].isin(sel_client_name)]
             if sel_product_kw:
                 df_filtered = df_filtered[df_filtered["推廣產品"].astype(str).str.contains(sel_product_kw, case=False)]
-            
-            if sel_fuzzy_kw:
-                search_cols = ["客戶名稱", "工作內容", "依賴事項", "實際行程"]
-                valid_cols = [c for c in search_cols if c in df_filtered.columns]
-                
-                if valid_cols:
-                    mask_fuzzy = pd.Series([False] * len(df_filtered), index=df_filtered.index)
-                    for col in valid_cols:
-                        mask_fuzzy |= df_filtered[col].astype(str).str.contains(sel_fuzzy_kw, case=False)
-                    
-                    df_filtered = df_filtered[mask_fuzzy]
+
+    # === 以下接續原本的 "4. 顯示統計指標" ===
 
     # 4. 顯示統計指標
     st.markdown("---")
