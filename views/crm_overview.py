@@ -411,13 +411,13 @@ def show(client, user_email, real_name, is_manager):
                 st.plotly_chart(fig_prod, use_container_width=True)
             else:
                 st.caption("無產品資料可顯示")
-
+                
     # 6. 詳細資料表
     st.subheader("📝 詳細列表")
     
     display_cols = [
-        "拜訪日期", "填寫人", "客戶所屬", "客戶名稱", "產業別", 
-        "推廣產品", "總金額", "行動方案", "實際行程", "依賴事項", "產出日期"
+        "拜訪日期", "填寫人", "客戶所屬", "客戶名稱", "實際行程", "產業別", 
+        "推廣產品", "總金額", "行動方案", "依賴事項", "產出日期"
     ]
     final_cols = [c for c in display_cols if c in df_filtered.columns]
     
