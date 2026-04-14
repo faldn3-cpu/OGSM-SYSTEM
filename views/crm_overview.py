@@ -437,12 +437,27 @@ def show(client, user_email, real_name, is_manager):
         }
     )
     
-    # 7. 匯出 CSV
+# 7. 匯出 CSV
     csv = df_filtered.to_csv(index=False).encode('utf-8-sig')
+    
+    # 【修正】動態產生下載檔名，解決 actual_db_name 找不到的問題
+    from datetime import datetime
+    export_time = datetime.now().strftime("%Y%m%d_%H%M")
+    
+    if is_global_search:
+        export_filename = f"CRM商機報表_關鍵字快搜_{export_time}.csv"
+    else:
+        # 確保一般模式下有抓到日期區間
+        if isinstance(date_range, tuple) and len(date_range) == 2:
+            sd, ed = date_range
+        else:
+            sd, ed = "未指定", "未指定"
+        export_filename = f"CRM商機報表_區間篩選_{sd}_至_{ed}.csv"
+
     st.download_button(
         label="📥 下載 CRM 報表 CSV",
         data=csv,
-        file_name=f"CRM商機報表_{actual_db_name}_{start_date}_{end_date}.csv",
+        file_name=export_filename,
         mime="text/csv"
     )
 
