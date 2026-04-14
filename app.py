@@ -97,8 +97,10 @@ def nav_to(page_name):
 # --- 主程式區 ---
 if st.session_state.current_page == "首頁":
     st.title("🚀 行動業務管理系統")
-    st.caption(f"你好，{real_name}。請選擇功能項目：")
     
+    # 【修正】安全地從登入狀態中抓取名字，若無則顯示「夥伴」
+    user_name = st.session_state.get("real_name", "夥伴")
+    st.caption(f"你好，{user_name}。請選擇功能項目：")
     col1, col2 = st.columns(2)
     with col1:
         if st.button("📝\nOGSM 日報", use_container_width=True): nav_to("📝 OGSM日報系統")
