@@ -66,68 +66,35 @@ if not st.session_state.https_checked:
 # ==========================================
 #  CSS 樣式設定
 # ==========================================
+# 找到 st.markdown("""<style>...""") 區塊，在裡面加入手機專屬 CSS
 st.markdown("""
 <style>
-#MainMenu {visibility: hidden;}
-footer {visibility: hidden;}
-header {visibility: visible !important;}
-[data-testid="stDecoration"] {display: none;}
-[data-testid="stElementToolbar"] { display: none; }
-.stAppDeployButton {display: none;}
-[data-testid="stManageAppButton"] {display: none;}
-
-div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"] {
-    border: 1px solid rgba(128, 128, 128, 0.2);
-    border-radius: 18px;
-    padding: 20px;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
-    background-color: var(--secondary-background-color); 
-    margin-bottom: 16px;
+/* 📱 手機版專屬優化 */
+@media (max-width: 768px) {
+    .block-container { padding: 1rem !important; }
+    .stButton > button { width: 100% !important; height: 50px !important; margin-bottom: 8px !important; }
+    input, select, textarea { font-size: 16px !important; }
 }
 
-div[role="radiogroup"] > label > div:first-child { display: none; }
+/* 側邊欄按鈕化美化 */
 div[role="radiogroup"] label {
-    width: 100% !important;           
-    display: flex;                    
-    justify-content: flex-start;
-    align-items: center;              
-    text-align: left;
-    padding: 12px 16px;
-    margin-bottom: 8px;
-    border-radius: 8px;
-    border: 1px solid rgba(128, 128, 128, 0.2); 
-    background-color: var(--secondary-background-color);
-    cursor: pointer;
-    transition: all 0.2s ease;
-    box-sizing: border-box;           
-}
-div[role="radiogroup"] label:hover {
-    background-color: var(--primary-color);
-    color: white !important;
-    opacity: 0.8;
-}
-div[role="radiogroup"] label[data-checked="true"] {
-    background-color: #0071e3 !important;
-    color: white !important;
-    font-weight: bold;
-    border: none;
-    box-shadow: 0 2px 8px rgba(0, 113, 227, 0.4);
-}
-div[role="radiogroup"] label p {
-    font-size: 15px;
-    margin: 0;
-    width: auto;                      
-    text-align: left;
-}
-
-input, select, textarea {
-    font-size: 16px !important;
-}
-button {
-    min-height: 48px !important;
+    padding: 12px 15px !important;
+    margin-bottom: 8px !important;
+    border-radius: 10px !important;
+    border: 1px solid rgba(128, 128, 128, 0.1) !important;
 }
 </style>
 """, unsafe_allow_html=True)
+
+# 找到頁面名稱清單，加上圖標
+pages = [
+    "📝 OGSM日報系統", 
+    "💰 牌價表查詢系統", 
+    "📊 OGSM日報總覽", 
+    "📈 CRM 商機總覽", 
+    "🔑 修改密碼", 
+    "👋 登出系統"
+]
 
 # ==========================================
 #  雲端資安設定 & 全域變數
