@@ -748,28 +748,29 @@ def show(client, db_name, user_email, real_name):
     # ==========================================
     #  狀態 B: 新增工作模式 (簡潔表單)
     # ==========================================
+    # 在 show 函式的 "add" 模式中 (約第 60 行附近)
     elif st.session_state.dr_mode == "add":
         st.subheader("➕ 新增工作")
-        
         with st.form("add_work_form", border=True):
-            c1, c2 = st.columns([1, 1])
-            with c1:
-                inp_date = st.date_input("日期", today)
-            with c2:
-                inp_type = st.selectbox("客戶分類", 
-                    ["請選擇", "(A) 直賣A級", "(B) 直賣B級", "(C) 直賣C級", "(D-A) 經銷A級", "(D-B) 經銷B級", "(D-C) 經銷C級", "(O) 其它"],
-                    index=0
-                )
+            # 不再使用 columns，改為由上往下排列
+            inp_date = st.date_input("🗓️ 選擇日期", today)
             
-            inp_client = st.text_input("客戶名稱", placeholder="客戶名稱", max_chars=MAX_FIELD_LENGTH)
-            inp_content = st.text_area("工作內容", placeholder="輸入預計行程", height=100, max_chars=MAX_FIELD_LENGTH)
-            inp_result = st.text_area("實際行程", placeholder="輸入當日實際行程", height=100, max_chars=MAX_FIELD_LENGTH)
+            inp_type = st.selectbox("🏷️ 客戶分類", 
+                ["請選擇", "(A) 直賣A級", "(B) 直賣B級", "(C) 直賣C級", "(D-A) 經銷A級", "(D-B) 經銷B級", "(D-C) 經銷C級", "(O) 其它"]
+            )
+            
+            inp_client = st.text_input("🏢 客戶名稱", placeholder="點擊填寫客戶全名")
+            
+            inp_content = st.text_area("📋 工作內容/計畫", placeholder="輸入預計行程...", height=100)
+            
+            # 使用 expander 收納，讓畫面更短
+            with st.expander("📝 填寫實際行程 (若已完成可填)"):
+                inp_result = st.text_area("實際內容", placeholder="輸入當日實際行程...", height=100)
 
-            c_sub, c_cancel = st.columns([1, 1])
-            with c_sub:
-                submitted = st.form_submit_button("加入清單", type="primary", use_container_width=True)
-            with c_cancel:
-                canceled = st.form_submit_button("取消返回", type="secondary", use_container_width=True)
+            st.markdown("<br>", unsafe_allow_html=True)
+            # 按鈕在手機版會因為 CSS 自動變滿版
+            submitted = st.form_submit_button("✅ 確認加入清單", type="primary", use_container_width=True)
+            canceled = st.form_submit_button("⬅️ 返回", use_container_width=True)
 
         if canceled:
             st.session_state.dr_mode = "main"
