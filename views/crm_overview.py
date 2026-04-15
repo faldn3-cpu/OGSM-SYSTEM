@@ -138,26 +138,10 @@ def show(client, user_email, real_name, is_manager):
     current_year = date.today().year
     
     # 僅保留有資料的分頁
-    # 1. 修改年度選擇與合併 (約第 106 行)
     sheet_options = {
-        f"🟢 [當前] {date.today().year} 年度 (主庫)": CRM_SHEET_NAME,
+        f"🟢 [當前] {current_year} 年度 (主庫)": CRM_SHEET_NAME,
         f"🗄️ [歷史] 2025 年度": "20251231"
     }
-    selected_sheet_labels = st.multiselect("📂 選擇查詢庫 (可複選)", options=list(sheet_options.keys()), default=[list(sheet_options.keys())[0]])
-
-    # 合併多個分頁資料
-    all_dfs = [load_crm_data_cached(client, CRM_DB_NAME, sheet_options[label]) for label in selected_sheet_labels]
-    df_original = pd.concat(all_dfs, ignore_index=True) if all_dfs else pd.DataFrame()
-
-# 2. 將關鍵字搜尋移到最上方 (模式切換邏輯)
-    sel_fuzzy_kw = st.text_input("🔍 全域關鍵字快搜", placeholder="輸入客戶名稱、內容... (無視日期限制)")
-
-# 3. 調整詳細列表的顯示順序 (表格顯示區塊)
-    display_cols = [
-        "拜訪日期", "填寫人", "客戶所屬", "客戶名稱", "實際行程", "產業別", 
-        "推廣產品", "總金額", "行動方案", "依賴事項"
-    ]
-    ui_rename_map = {"實際行程": "目前狀況"} # 欄位順序已調整，且更名為目前狀況
     
     # 【修改 1】改為 st.multiselect 允許複選，並預設勾選當前年度
     default_selection = [f"🟢 [當前] {current_year} 年度 (主庫)"]
