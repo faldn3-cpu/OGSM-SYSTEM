@@ -138,7 +138,8 @@ SMTP_PASSWORD = ""
 PRICE_DB_NAME = '經銷牌價表_資料庫'
 REPORT_DB_NAME = '業務日報表_資料庫'
 
-VALID_ROLES = {"admin", "manager", "assistant", "sales"}
+# 【資安強化】加入 "other" 作為其他部門的專屬代號
+VALID_ROLES = {"admin", "manager", "assistant", "sales", "other"}
 
 try:
     if "email" in st.secrets:
@@ -413,15 +414,21 @@ def post_login_init(email, name, role_override=None):
     st.session_state.login_attempts = 0
 
     if role_override:
+        # 管理員切換身份時直接指定角色
         st.session_state.role = role_override
     else:
-        role_from_sheet = "sales"
+        # 【資安強化】落實零信任 (Default Deny 原則)
+        # 只要身分不明、空白、或拼字錯誤，預設降級為 "other" (僅能查看牌價表)，絕不給予 sales 權限
+        role_from_sheet = "other" 
         try:
             all_users = get_users_list_cached()
             for user in all_users:
                 if str(user.get("email", "")).strip().lower() == email.strip().lower():
                     raw_role = str(user.get("role", "")).strip().lower()
-                    if raw_role in VALID_ROLES: role_from_sheet = raw_role
+                    if raw_role in VALID_ROLES:
+                        role_from_sheet = raw_role
+                    else:
+                        logging.warning(f"User {email} has invalid role '{raw_role}', defaulting to other")
                     break
         except Exception: pass
         st.session_state.role = role_from_sheet
