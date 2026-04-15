@@ -283,6 +283,13 @@ def show(client, db_name, user_email, real_name):
                             st.markdown(f"#### {row['客戶名稱']}")
                             st.caption(f"📅 {row['日期']} | 🏷️ {row['客戶分類']}")
                         with c2:
+                            # 🌟 【新增】卡片獨立修改按鈕
+                            if st.button("✏️ 修改", key=f"edit_btn_card_{idx}", use_container_width=True):
+                                st.session_state.dr_edit_data = row.to_dict()
+                                st.session_state.dr_edit_idx = idx
+                                st.session_state.dr_mode = "edit"
+                                st.rerun()
+                            # 保留原本的同步按鈕
                             if st.button("🔄 同步", key=f"sync_btn_card_{idx}", use_container_width=True):
                                 st.session_state.dr_sync_data = row.to_dict()
                                 st.session_state.dr_mode = "sync"
@@ -397,7 +404,87 @@ def show(client, db_name, user_email, real_name):
                         st.session_state.dr_mode = "main"
                         st.rerun()
                     else: st.error(f"儲存失敗: {msg}")
+                        
+    # --- [After: 修改後程式碼 (新增修改模式區塊)] ---
+    # ==========================================
+    #  狀態 D: 修改工作模式 (手機版獨立卡片修改)
+    # ==========================================
+    elif st.session_state.dr_mode == "edit":
+        row_data = st.session_state.get("dr_edit_data")
+        edit_idx = st.session_state.get("dr_edit_idx")
+        
+        if not row_data:
+            st.session_state.dr_mode = "main"
+            st.rerun()
 
+        st.subheader("✏️ 修改工作內容")
+        
+        with st.form("edit_work_form", border=True):
+            c1, c2 = st.columns([1, 1])
+            with c1:
+                # 處理原本的日期帶入
+                try:
+                    default_date = pd.to_datetime(row_data["日期"]).date()
+                except:
+                    default_date = today
+                inp_date = st.date_input("日期", default_date)
+                
+            with c2:
+                cat_options = ["請選擇", "(A) 直賣A級", "(B) 直賣B級", "(C) 直賣C級", "(D-A) 經銷A級", "(D-B) 經銷B級", "(D-C) 經銷C級", "(O) 其它"]
+                current_cat = str(row_data.get("客戶分類", "請選擇"))
+                if current_cat not in cat_options: current_cat = "請選擇"
+                inp_type = st.selectbox("客戶分類", cat_options, index=cat_options.index(current_cat))
+            
+            inp_client = st.text_input("客戶名稱", value=str(row_data.get("客戶名稱", "")), max_chars=MAX_FIELD_LENGTH)
+            inp_content = st.text_area("工作內容", value=str(row_data.get("工作內容", "")), height=100, max_chars=MAX_FIELD_LENGTH)
+            inp_result = st.text_area("實際行程", value=str(row_data.get("實際行程", "")), height=100, max_chars=MAX_FIELD_LENGTH)
+
+            c_sub, c_cancel = st.columns([1, 1])
+            with c_sub:
+                submitted = st.form_submit_button("💾 儲存修改", type="primary", use_container_width=True)
+            with c_cancel:
+                canceled = st.form_submit_button("❌ 取消返回", type="secondary", use_container_width=True)
+
+        if canceled:
+            st.session_state.dr_mode = "main"
+            st.rerun()
+
+        if submitted:
+            inp_client = sanitize_input(inp_client)
+            inp_content = sanitize_input(inp_content)
+            inp_result = sanitize_input(inp_result)
+            
+            if not inp_client and inp_type != "(O) 其它":
+                st.warning("⚠️ 請輸入客戶名稱")
+            else:
+                final_client_name = inp_client if inp_client else "-"
+                
+                # 從目前的 df 中抽取出基礎資料 (移除 UI 專用欄位)
+                if current_df is not None:
+                    df_base = current_df.drop(columns=["選取", "同步"], errors='ignore')
+                else:
+                    df_base = pd.DataFrame()
+
+                # 精準更新指定的該筆資料 (透過 edit_idx)
+                if edit_idx in df_base.index:
+                    df_base.loc[edit_idx, "日期"] = inp_date
+                    df_base.loc[edit_idx, "客戶名稱"] = final_client_name
+                    df_base.loc[edit_idx, "客戶分類"] = inp_type if inp_type != "請選擇" else ""
+                    df_base.loc[edit_idx, "工作內容"] = inp_content
+                    df_base.loc[edit_idx, "實際行程"] = inp_result
+                    df_base.loc[edit_idx, "最後更新時間"] = get_tw_time()
+                
+                with st.spinner("正在儲存變更..."):
+                    success, msg = save_to_google_sheet(ws, all_df, df_base, start_date, end_date)
+                    if success:
+                        st.success("✅ 修改已儲存！")
+                        st.session_state.dr_mode = "main" # 切回首頁
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.error(f"儲存失敗: {msg}")
+
+    
     # ==========================================
     #  狀態 C: 同步模式 (三步驟精靈)
     # ==========================================
