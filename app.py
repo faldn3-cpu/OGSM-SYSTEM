@@ -440,37 +440,33 @@ def admin_switch_callback(target_email, target_name):
 
 def main():
     try:
-        cookie_manager = stx.CookieManager()
+        # 🌟【移除第三方 Cookie 套件】徹底解決雲端載入延遲導致的畫面破裂錯誤
         client = get_client()
-        if client: auto_cleanup_logs(client)
+        if client:
+            auto_cleanup_logs(client)
 
         if not st.session_state.logged_in:
             col1, col2, col3 = st.columns([1, 2, 1])
             with col2:
                 st.markdown("<br><br>", unsafe_allow_html=True)
-                st.header("⚡ 士林電機FA 業務系統")
+                st.header("🔒 士林電機FA 業務系統")
                 
+                if st.session_state.login_attempts >= 3:
+                    pass
+
                 tab1, tab2 = st.tabs(["會員登入", "忘記密碼"])
                 with tab1:
-                    last_email = cookie_manager.get("last_email") or ""
                     with st.form("login"):
-                        email = st.text_input("Email", value=last_email, max_chars=100, placeholder="請輸入您的 Email")
+                        # 🌟【改用原生體驗】交給 iOS/Android 原生的 FaceID/密碼自動填寫功能
+                        email = st.text_input("Email", value="", max_chars=100, placeholder="請輸入您的 Email")
                         pwd = st.text_input("密碼", type="password", max_chars=50, placeholder="請輸入密碼")
-                        remember_email = st.checkbox("記住帳號", value=True)
+                        
                         if st.form_submit_button("登入", use_container_width=True):
                             if not email or not pwd: st.error("請輸入完整資訊")
                             else:
                                 success, result = login(email, pwd)
                                 if success:
                                     write_session_log(email, result, action="LOGIN")
-                                    if remember_email:
-                                        try:
-                                            expires = datetime.now(timezone(timedelta(hours=8))) + timedelta(days=365)
-                                            cookie_manager.set("last_email", email, expires_at=expires, key="set_last_email_cookie")
-                                        except: pass
-                                    else:
-                                        try: cookie_manager.delete("last_email", key="del_last_email_cookie")
-                                        except: pass
                                     time.sleep(1.5)
                                     st.session_state.real_user_email = email
                                     post_login_init(email, result)
