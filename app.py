@@ -66,59 +66,68 @@ if not st.session_state.https_checked:
 # ==========================================
 #  CSS 樣式設定
 # ==========================================
-# 找到 st.markdown("""<style>...""") 區塊，在裡面加入手機專屬 CSS
-# --- app.py 修改建議 ---
-
-# 在原本的 CSS 區塊加入「App 瓷磚按鈕」樣式
 st.markdown("""
 <style>
-    /* 讓 Streamlit 原本的按鈕變高變大，像 App 瓷磚 */
-    div.stButton > button {
-        height: 120px !important;
-        font-size: 20px !important;
-        border-radius: 15px !important;
-        flex-direction: column !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        line-height: 1.5 !important;
-    }
+#MainMenu {visibility: hidden;}
+footer {visibility: hidden;}
+header {visibility: visible !important;}
+[data-testid="stDecoration"] {display: none;}
+[data-testid="stElementToolbar"] { display: none; }
+.stAppDeployButton {display: none;}
+[data-testid="stManageAppButton"] {display: none;}
+
+div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"] {
+    border: 1px solid rgba(128, 128, 128, 0.2);
+    border-radius: 18px;
+    padding: 20px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+    background-color: var(--secondary-background-color); 
+    margin-bottom: 16px;
+}
+
+div[role="radiogroup"] > label > div:first-child { display: none; }
+div[role="radiogroup"] label {
+    width: 100% !important;           
+    display: flex;                    
+    justify-content: flex-start;
+    align-items: center;              
+    text-align: left;
+    padding: 12px 16px;
+    margin-bottom: 8px;
+    border-radius: 8px;
+    border: 1px solid rgba(128, 128, 128, 0.2); 
+    background-color: var(--secondary-background-color);
+    cursor: pointer;
+    transition: all 0.2s ease;
+    box-sizing: border-box;           
+}
+div[role="radiogroup"] label:hover {
+    background-color: var(--primary-color);
+    color: white !important;
+    opacity: 0.8;
+}
+div[role="radiogroup"] label[data-checked="true"] {
+    background-color: #0071e3 !important;
+    color: white !important;
+    font-weight: bold;
+    border: none;
+    box-shadow: 0 2px 8px rgba(0, 113, 227, 0.4);
+}
+div[role="radiogroup"] label p {
+    font-size: 15px;
+    margin: 0;
+    width: auto;                      
+    text-align: left;
+}
+
+input, select, textarea {
+    font-size: 16px !important;
+}
+button {
+    min-height: 48px !important;
+}
 </style>
 """, unsafe_allow_html=True)
-
-# 導覽邏輯：使用 session_state 控制頁面
-if 'current_page' not in st.session_state:
-    st.session_state.current_page = "首頁"
-
-def nav_to(page_name):
-    st.session_state.current_page = page_name
-    st.rerun()
-
-# --- 主程式區 ---
-if st.session_state.current_page == "首頁":
-    st.title("🚀 行動業務管理系統")
-    
-    # 【修正】安全地從登入狀態中抓取名字，若無則顯示「夥伴」
-    user_name = st.session_state.get("real_name", "夥伴")
-    st.caption(f"你好，{user_name}。請選擇功能項目：")
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("📝\nOGSM 日報", use_container_width=True): nav_to("📝 OGSM日報系統")
-        if st.button("📊\n日報總覽", use_container_width=True): nav_to("📊 OGSM日報總覽")
-    with col2:
-        if st.button("📈\nCRM 商機", use_container_width=True): nav_to("📈 CRM 商機總覽")
-        if st.button("💰\n牌價查詢", use_container_width=True): nav_to("💰 牌價表查詢系統")
-    
-    st.markdown("---")
-    if st.button("👋 登出系統", use_container_width=True):
-        st.session_state.authenticated = False
-        st.rerun()
-else:
-    # 每個子頁面最上方補一個返回按鈕
-    if st.button("🏠 返回首頁", use_container_width=True):
-        nav_to("首頁")
-    
-    # 根據 st.session_state.current_page 載入對應模組 (原本的 if/elif 邏輯)
 
 # ==========================================
 #  雲端資安設定 & 全域變數
