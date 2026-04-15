@@ -684,39 +684,59 @@ def main():
                                 st.error("修改失敗，請聯繫管理員")
             return
 
-        with st.sidebar:
-            greeting = get_greeting()
-            st.write(f"👤 **{st.session_state.real_name}**")
-            st.caption(f"{greeting}")
+        # 🌟 實作「Apple 級直覺」導覽架構 (移除原本的 sidebar 選單)
+        current_role = st.session_state.get("role", "sales")
+        
+        # 1. 權限地圖：決定不同身分看到的「導覽標籤」
+        if current_role in ["admin", "manager"]:
+            nav_options = ["📋 日報", "💰 牌價", "👤 我的"]
+        elif current_role == "sales":
+            nav_options = ["📋 日報", "💰 牌價", "👤 我的"]
+        else:
+            # 其他部門人員：看不到業務核心資料，只能查牌價
+            nav_options = ["💰 牌價", "👤 我的"]
             
-            st.markdown("---")
-            
-            pages = ["📝 OGSM日報系統", "💰 牌價表查詢系統", "📊 OGSM日報總覽", "📊 CRM 商機總覽", "🔑 修改密碼", "👋 登出系統"]
-            sel = st.radio("功能", pages, key="page_radio", label_visibility="collapsed")
-            
-            st.markdown("---")
-            try:
-                file_timestamp = os.path.getmtime(__file__)
-                tw_time = datetime.fromtimestamp(file_timestamp, timezone(timedelta(hours=8)))
-                last_updated_str = tw_time.strftime('%Y-%m-%d %H:%M')
-                st.caption(f"檔案版本: {last_updated_str}")
-            except:
-                st.caption("Ver: Latest")
-                
-            boot_time = get_system_boot_time()
-            st.caption(f"系統啟動: {boot_time}")
+        # 2. 呈現頂部水平導覽列 (模仿手機 Tab)
+        st.markdown(f"### ⚡ 士電業務整合系統")
+        sel = st.radio("導覽標籤", nav_options, horizontal=True, label_visibility="collapsed")
+        st.divider()
 
-            # 【新增】管理員切換身份 (隱藏功能：需先解鎖)
-            if st.session_state.get("admin_mode_unlocked", False):
-                st.markdown("---")
-                with st.expander("👑 管理員切換身份 (Unlocked)", expanded=True):
-                    all_records = get_users_list_cached()
-                    if all_records:
-                        user_map = {f"{u.get('name')} ({u.get('email')})": u for u in all_records}
-                        target = st.selectbox("選擇模擬對象", list(user_map.keys()))
-                        t_user = user_map[target]
-                        st.button("確認切換", type="primary", on_click=admin_switch_callback, args=(t_user.get('email'), t_user.get('name')))
-
+        # 3. 頁面分發邏輯
+        if sel == "📋 日報":
+            daily_report.show(client, REPORT_DB_NAME, st.session_state.user_email, st.session_state.real_name)
+            
+        elif sel == "💰 牌價":
+            audit_id = st.session_state.user_email
+            if st.session_state.get("real_user_email") != audit_id:
+                audit_id = f"{st.session_state.real_user_email} (模擬: {audit_id})"
+            price_query.show(client, PRICE_DB_NAME, audit_id, st.session_state.real_name, current_role in ("manager", "admin"), current_role=="admin")
+            
+        elif sel == "👤 我的":
+            # 實作您的第 5 個畫面：個人化中心
+            st.markdown(f"#### 👤 {st.session_state.real_name}")
+            st.caption(f"角色：{current_role} | 帳號：{st.session_state.user_email}")
+            
+            # 主管限定區：整合所有總覽功能
+            if current_role in ["admin", "manager"]:
+                with st.container(border=True):
+                    st.markdown("📈 **主管決策總覽**")
+                    if st.button("📊 OGSM 日報總覽", use_container_width=True):
+                        # 此處未來可導向 report_overview.show
+                        pass
+                    if st.button("📊 CRM 商機總覽", use_container_width=True):
+                        # 此處未來可導向 crm_overview.show
+                        pass
+            
+            # 帳號與安全設定
+            with st.container(border=True):
+                st.markdown("⚙️ **帳號設定**")
+                if st.button("🔑 修改密碼", use_container_width=True):
+                    # 邏輯接續原有的修改密碼
+                    pass
+                if st.button("👋 登出系統", type="primary", use_container_width=True):
+                    st.session_state.logged_in = False
+                    st.rerun()
+        
         if sel == "👋 登出系統":
             write_log("登出系統", st.session_state.user_email)
             write_session_log(st.session_state.user_email, st.session_state.real_name, action="LOGOUT")
