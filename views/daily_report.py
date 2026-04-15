@@ -619,25 +619,51 @@ def show(client, db_name, user_email, real_name):
         # 表格顯示 (加入 Sync 觸發偵測)
         # 【修正】設定 height=400 以顯示更多列數
         # 【修正】column_config 增加具體寬度設定
-        edited_df = st.data_editor(
-            current_df,
-            num_rows="dynamic",
-            hide_index=True,
-            use_container_width=True,
-            height=400, 
-            column_config={
-                "選取": st.column_config.CheckboxColumn("LINE日報", width=80, help="勾選以加入下方 LINE 日報文字"),
-                "同步": st.column_config.CheckboxColumn("同步", width=60, help="勾選後自動儲存並跳轉至客戶關係表單"),
-                "日期": st.column_config.DateColumn("日期", format="YYYY-MM-DD", width=100),
-                "客戶名稱": st.column_config.TextColumn("客戶名稱", width=150),
-                "客戶分類": st.column_config.SelectboxColumn("客戶分類", width=120, 
-                    options=["(A) 直賣A級", "(B) 直賣B級", "(C) 直賣C級", "(D-A) 經銷A級", "(D-B) 經銷B級", "(D-C) 經銷C級", "(O) 其它"]),
-                "工作內容": st.column_config.TextColumn("工作內容", width="large"),
-                "實際行程": st.column_config.TextColumn("實際行程", width="large"),
-                "最後更新時間": st.column_config.TextColumn("更新時間", disabled=True, width=100)
-            },
-            key="data_editor_main"
-        )
+        st.write("📱 **快速概覽 (手機專用視角)**")
+        
+        if not current_df.empty:
+            for idx, row in current_df.iterrows():
+                # 建立具有邊框感的卡片
+                with st.container(border=True):
+                    c1, c2 = st.columns([3, 1])
+                    with c1:
+                        st.markdown(f"### {row['客戶名稱']}")
+                        st.caption(f"📅 {row['日期']} | 🏷️ {row['客戶分類']}")
+                    with c2:
+                        # 獨立的卡片同步按鈕
+                        if st.button("🔄 同步", key=f"sync_btn_card_{idx}"):
+                            st.session_state.dr_sync_data = row.to_dict()
+                            st.session_state.dr_mode = "sync"
+                            st.rerun()
+                    
+                    # 顯示核心工作內容
+                    st.info(f"**計畫：** {row['工作內容'] if row['工作內容'] else '無'}")
+                    if row['實際行程']:
+                        st.success(f"**實際：** {row['實際行程']}")
+        else:
+            st.info("今日尚無工作安排")
+
+        # 🌟 【保留並隱藏】原有的電腦版大表格 (將原本整段放入 expander 中，確保後續存檔功能正常)
+        with st.expander("🛠️ 展開完整編輯表格 (電腦操作 / 勾選 LINE 日報建議用此處)", expanded=False):
+            edited_df = st.data_editor(
+                current_df,
+                num_rows="dynamic",
+                hide_index=True,
+                use_container_width=True,
+                height=400, 
+                column_config={
+                    "選取": st.column_config.CheckboxColumn("LINE日報", width=80, help="勾選以加入下方 LINE 日報文字"),
+                    "同步": st.column_config.CheckboxColumn("同步", width=60, help="勾選後自動儲存並跳轉至客戶關係表單"),
+                    "日期": st.column_config.DateColumn("日期", format="YYYY-MM-DD", width=100),
+                    "客戶名稱": st.column_config.TextColumn("客戶名稱", width=150),
+                    "客戶分類": st.column_config.SelectboxColumn("客戶分類", width=120, 
+                        options=["(A) 直賣A級", "(B) 直賣B級", "(C) 直賣C級", "(D-A) 經銷A級", "(D-B) 經銷B級", "(D-C) 經銷C級", "(O) 其它"]),
+                    "工作內容": st.column_config.TextColumn("工作內容", width="large"),
+                    "實際行程": st.column_config.TextColumn("實際行程", width="large"),
+                    "最後更新時間": st.column_config.TextColumn("更新時間", disabled=True, width=100)
+                },
+                key="data_editor_main"
+            )
 
         # 儲存按鈕
         if st.button("💾 儲存修改", type="secondary", use_container_width=True):
