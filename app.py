@@ -137,7 +137,7 @@ SMTP_PASSWORD = ""
 PRICE_DB_NAME = '經銷牌價表_資料庫'
 REPORT_DB_NAME = '業務日報表_資料庫'
 
-VALID_ROLES = {"admin", "manager", "assistant", "sales"}  # 合法角色清單
+VALID_ROLES = {"admin", "manager", "assistant", "sales", "price_only"}  # 合法角色清單
 
 try:
     if "email" in st.secrets:
@@ -533,7 +533,7 @@ def post_login_init(email, name, role_override=None):
             logging.error(f"post_login_init: failed to fetch role for {email}: {e}")
         st.session_state.role = role_from_sheet
 
-    st.session_state.page_radio = "💰 牌價表查詢系統" if st.session_state.role == "assistant" else "📝 OGSM日報系統"
+    st.session_state.page_radio = "💰 牌價表查詢系統" if st.session_state.role in ("assistant", "price_only") else "📝 OGSM日報系統"
 
 # 【新增】管理員切換身分的回調函式 (Callback)
 # 將切換邏輯移至此處，透過 on_click 觸發，確保在頁面重新渲染前更新狀態
@@ -691,7 +691,17 @@ def main():
             
             st.markdown("---")
             
-            pages = ["📝 OGSM日報系統", "💰 牌價表查詢系統", "📊 OGSM日報總覽", "📊 CRM 商機總覽", "🔑 修改密碼", "👋 登出系統"]
+            # 【新增】price_only 角色只能使用牌價查詢
+            if st.session_state.role == "price_only":
+                pages = ["💰 牌價表查詢系統", "🔑 修改密碼", "👋 登出系統"]
+            else:
+                pages = ["📝 OGSM日報系統", "💰 牌價表查詢系統", "📊 OGSM日報總覽", "📊 CRM 商機總覽", "🔑 修改密碼", "👋 登出系統"]
+            
+            # 確保目前選取的頁面在此角色的合法清單內，否則重置
+            if st.session_state.page_radio not in pages:
+                st.session_state.page_radio = pages[0]
+                st.rerun()
+            
             sel = st.radio("功能", pages, key="page_radio", label_visibility="collapsed")
             
             st.markdown("---")
