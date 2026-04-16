@@ -126,64 +126,6 @@ input, select, textarea {
 button {
     min-height: 48px !important;
 }
-
-/* ============================================
-   手機響應式佈局 (640px 以下)
-   ============================================ */
-@media (max-width: 640px) {
-    /* 隱藏 sidebar 與開關按鈕 */
-    [data-testid="stSidebar"] { display: none !important; }
-    [data-testid="collapsedControl"] { display: none !important; }
-    /* 主內容：底部留白給導覽列 + 收緊左右邊距 */
-    .main .block-container {
-        padding-bottom: 80px !important;
-        padding-left: 12px !important;
-        padding-right: 12px !important;
-    }
-    /* 所有欄位自動堆疊 (讓登入頁、表單等在手機上全寬) */
-    [data-testid="stHorizontalBlock"] { flex-wrap: wrap !important; }
-    [data-testid="stColumn"] { min-width: 100% !important; flex: none !important; }
-}
-
-/* ============================================
-   手機底部導覽列
-   ============================================ */
-.mobile-nav { display: none; }
-
-@media (max-width: 640px) {
-    .mobile-nav {
-        position: fixed;
-        bottom: 0; left: 0; right: 0;
-        height: 58px;
-        z-index: 99999;
-        background: white;
-        border-top: 0.5px solid rgba(0, 0, 0, 0.12);
-        display: flex !important;
-    }
-    .mobile-nav a {
-        flex: 1;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        text-decoration: none;
-        color: #888;
-        font-size: 10px;
-        font-weight: 400;
-        gap: 2px;
-        -webkit-tap-highlight-color: transparent;
-        transition: color 0.15s;
-    }
-    .mobile-nav a .nav-icon { font-size: 20px; line-height: 1.2; }
-    .mobile-nav a.nav-active { color: #0071e3; font-weight: 500; }
-    .mobile-nav a.nav-active .nav-icon { transform: scale(1.1); }
-}
-/* 深色模式 */
-@media (max-width: 640px) and (prefers-color-scheme: dark) {
-    .mobile-nav { background: #0e1117; border-top-color: rgba(255,255,255,0.1); }
-    .mobile-nav a { color: #888; }
-    .mobile-nav a.nav-active { color: #4da6ff; }
-}
 </style>
 """, unsafe_allow_html=True)
 
@@ -451,31 +393,6 @@ def auto_cleanup_logs(client):
 # ==========================================
 #  其他輔助函式 (含快取優化)
 # ==========================================
-# ==========================================
-#  📱 手機底部導覽列
-# ==========================================
-def build_mobile_nav(sel, role):
-    """
-    產生手機底部導覽列 HTML。
-    使用 ?nav=xxx query param 觸發 Streamlit rerun 切換頁面。
-    """
-    def item(icon, label, page_key, param):
-        cls = "nav-active" if sel == page_key else ""
-        return (
-            f'<a href="?nav={param}" class="{cls}">'
-            f'<span class="nav-icon">{icon}</span>{label}</a>'
-        )
-
-    parts = []
-    parts.append(item("📝", "日報",  "📝 OGSM日報系統",    "daily"))
-    parts.append(item("💰", "牌價",  "💰 牌價表查詢系統",  "price"))
-    # 總覽：manager / admin 才顯示
-    if role in ("manager", "admin"):
-        parts.append(item("📊", "總覽",  "📊 OGSM日報總覽",    "overview"))
-    parts.append(item("👤", "我的",  "🔑 修改密碼",          "profile"))
-
-    return f'<div class="mobile-nav">{"".join(parts)}</div>'
-
 def get_greeting():
     tw_tz = timezone(timedelta(hours=8))
     current_hour = datetime.now(tw_tz).hour
@@ -767,68 +684,6 @@ def main():
                                 st.error("修改失敗，請聯繫管理員")
             return
 
-        # ==========================================
-        #  📱 手機導覽 — query param 同步
-        # ==========================================
-        _nav_map = {
-            "daily":    "📝 OGSM日報系統",
-            "price":    "💰 牌價表查詢系統",
-            "overview": "📊 OGSM日報總覽",
-            "crm":      "📊 CRM 商機總覽",
-            "profile":  "🔑 修改密碼",
-        }
-        _nav_param = st.query_params.get("nav", "")
-        if _nav_param in _nav_map:
-            _target = _nav_map[_nav_param]
-            if st.session_state.page_radio != _target:
-                st.session_state.page_radio = _target
-                st.rerun()
-
-        # ==========================================
-        #  💰 price_only — 極簡牌價查詢介面
-        #  (無 sidebar、無導覽、純搜尋)
-        # ==========================================
-        if st.session_state.role == "price_only":
-            # 隱藏 sidebar 與折疊按鈕
-            st.markdown("""
-            <style>
-            [data-testid="stSidebar"],
-            [data-testid="collapsedControl"] { display: none !important; }
-            .main .block-container { max-width: 780px; margin: 0 auto; padding: 1rem 1rem 2rem; }
-            </style>
-            """, unsafe_allow_html=True)
-
-            # 頂部極簡 header
-            hc1, hc2 = st.columns([4, 1])
-            with hc1:
-                st.markdown(
-                    f"**💰 牌價查詢**&nbsp;&nbsp;"
-                    f"<span style='font-size:13px;color:#888;font-weight:400'>"
-                    f"👤 {st.session_state.real_name}</span>",
-                    unsafe_allow_html=True
-                )
-            with hc2:
-                if st.button("登出", use_container_width=True, type="secondary"):
-                    write_log("登出系統", st.session_state.user_email)
-                    write_session_log(
-                        st.session_state.user_email,
-                        st.session_state.real_name,
-                        action="LOGOUT"
-                    )
-                    st.session_state.logged_in = False
-                    st.session_state.real_user_email = ""
-                    st.session_state.admin_mode_unlocked = False
-                    st.rerun()
-
-            st.divider()
-            price_query.show(
-                client, PRICE_DB_NAME,
-                st.session_state.user_email,
-                st.session_state.real_name,
-                False, False
-            )
-            return
-
         with st.sidebar:
             greeting = get_greeting()
             st.write(f"👤 **{st.session_state.real_name}**")
@@ -881,14 +736,6 @@ def main():
             st.session_state.admin_mode_unlocked = False 
             st.rerun()
 
-        # ==========================================
-        #  📱 注入手機底部導覽列
-        # ==========================================
-        st.markdown(
-            build_mobile_nav(sel, st.session_state.role),
-            unsafe_allow_html=True
-        )
-
         if not client:
             st.error("無法連線資料庫，請稍後再試")
             return
@@ -932,17 +779,6 @@ def main():
                         st.session_state.logged_in = False
                         st.rerun()
                     else: st.error("修改失敗，請聯繫管理員")
-
-            # 【新增】手機版「我的」頁面的登出按鈕
-            st.markdown("---")
-            st.caption("👇 手機版可在此直接登出")
-            if st.button("👋 登出系統", use_container_width=True, type="secondary"):
-                write_log("登出系統", st.session_state.user_email)
-                write_session_log(st.session_state.user_email, st.session_state.real_name, action="LOGOUT")
-                st.session_state.logged_in = False
-                st.session_state.real_user_email = ""
-                st.session_state.admin_mode_unlocked = False
-                st.rerun()
     
     except Exception as e:
         error_msg = traceback.format_exc()
