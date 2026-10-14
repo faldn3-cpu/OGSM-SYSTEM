@@ -1,39 +1,35 @@
-import streamlit as st
-import requests
+import streamlit as st  # type: ignore
 from datetime import date, datetime, timezone, timedelta
 import pandas as pd
-import gspread 
+import gspread  # type: ignore
 import time
 from functools import wraps
 import logging
-import streamlit.components.v1 as components  # 引入元件庫以支援 JS 複製
+import streamlit.components.v1 as components  # type: ignore  # 引入元件庫以支援 JS 複製
 
 # ==========================================
-#  設定：客戶關係表單 (CRM) 精確選項清單
-#  (⚠️ 已與 Google 表單選項保持 100% 一致)
+#  設定：客戶關係表單 (CRM) 選項與參數
 # ==========================================
 CRM_DB_NAME = "客戶關係表單 (回覆)"
 
 # 通路商選項
 CRM_OPT_CHANNEL = ["直販", "二次店", "上控廠商", "經銷商", "其他"]
-
 # 競爭通路
 CRM_OPT_COMP_CHANNEL = ["無", "能麒", "上菱", "強力", "日遠", "耀毅", "三菱其他通路(瀚衛、惠控、雙象)", "羅昇", "友士", "碁電", "其他"]
 
-# 行動方案
-CRM_OPT_ACTION = ["出差到客戶端拜訪", "電話聯繫 & 報價事宜 & 其他"]
+# 行動方案 (修正後：僅保留兩個選項)
+CRM_OPT_ACTION = ["出差到客戶端拜訪", "電話聯繫、報價事宜、其他"]
 
 # 是否為流失客戶取回
 CRM_OPT_LOST_RECOVERY = [
     "無",
-    "曾仁君 - 新林電機、新碩自動",
-    "溫達仁 - 崇翌科技、台銨科技、全美自動、泓發機電、協易機械、鑫詮科技、迎傑機電、由田新技、祥侑企業、梭特科技",
-    "楊家豪 - 順瀅企業、宇貫企業",
-    "謝瑞騏 - 福星機電、德世達科、磊登自動、睿明科技、碩聯自動",
-    "莊富丞 - 東佑達奈、叡億機械、理豐智動、東典科技",
-    "張書偉 - 鴻績工業、汎得自動、達詳自動、捷惠自動"
+    "曾仁君 - 新林電機", "曾仁君 - 新碩自動",
+    "溫達仁 - 崇翌科技", "溫達仁 - 台銨科技", "溫達仁 - 全美自動", "溫達仁 - 泓發機電", "溫達仁 - 協易機械", "溫達仁 - 鑫詮科技", "溫達仁 - 迎傑機電", "溫達仁 - 由田新技", "溫達仁 - 祥侑企業", "溫達仁 - 梭特科技",
+    "楊家豪 - 順瀅企業", "楊家豪 - 宇貫企業",
+    "謝瑞騏 - 福星機電", "謝瑞騏 - 德世達科", "謝瑞騏 - 磊登自動", "謝瑞騏 - 睿明科技", "謝瑞騏 - 碩聯自動",
+    "莊富丞 - 東佑達奈", "莊富丞 - 叡億機械", "莊富丞 - 理豐智動", "莊富丞 - 東典科技",
+    "張書偉 - 鴻績工業", "張書偉 - 汎得自動", "張書偉 - 達詳自動", "張書偉 - 捷惠自動", "張書偉 - 威光自動"
 ]
-
 # 產業別
 CRM_OPT_INDUSTRY = [
     "電子產業 (半導體產業 & PCB產業 & AI產業...)", 
@@ -43,30 +39,18 @@ CRM_OPT_INDUSTRY = [
     "盤廠 & 機械廠", 
     "其他"
 ]
-
 # 販售或推廣產品
-CRM_OPT_PRODUCTS = [
-    "士林品(變頻器、伺服、小型PLC、人機介面、溫控器、SD-INV)",
-    "三菱品(變頻器、伺服、小型PLC、大型PLC、人機介面、運動控制器、機械手臂)",
-    "松下品(感測器、雷射雕刻機)、IDEC、台灣氣立CHELIC",
-    "減速機(主推Nidec、利茗、松品)",
-    "開關類(士林品牌)",
-    "太陽能",
-    "其他(溫控器、警示燈)"
-]
-
+CRM_OPT_PRODUCTS = ["士林品", "三菱品", "松下品", "開關類", "太陽能", "其他"]
 # 預計產出日期
 CRM_OPT_EST_DATE = [
     "1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月",
-    "Q1(第一季)", "Q2(第二季)", "Q3(第三季)", "Q4(第四季)", "H1(上半年)", "H2(下半年)", "明年"
+    "Q1", "Q2", "Q3", "Q4", "H1", "H2"
 ]
-
 # 競爭品牌
 CRM_OPT_COMP_BRAND = ["台灣品牌", "日系品牌", "歐系品牌", "其他品牌"]
-
 # 客戶所屬
 CRM_OPT_OWNER = [
-    "張何達", "曾仁君", "邱文輝", "葉仁豪", "溫達仁", "楊家豪", "莊富丞", "何宛茹", "張書偉", "黃柏翰"
+    "曾維崧", "張何達", "曾仁君", "溫達仁", "楊家豪", "莊富丞", "謝瑞騏", "何宛茹", "張書偉", "邱文輝", "葉仁豪", "其他"
 ]
 
 # ==========================================
@@ -240,6 +224,23 @@ def load_data_by_range_cached(ws, start_date, end_date):
             for col in ["客戶名稱", "工作內容", "實際行程", "客戶分類", "最後更新時間"]:
                 if col in df.columns: df[col] = df[col].astype(str)
 
+            # 【相容修復】自動轉譯手機 PWA 寫入之長字串至標準 Selectbox 選項 (消除空白現象)
+            norm_map = {
+                "A客戶 - 大手客戶 & 既有客戶": "(A) 直賣A級",
+                "A客戶 - 大手客戶 &既有客戶": "(A) 直賣A級",
+                "B客戶 - 前一年新成交": "(B) 直賣B級",
+                "C客戶 - 預計開發及今年新成交": "(C) 直賣C級",
+                "D-A客戶 - 經銷商 大手客戶 & 既有客戶": "(D-A) 經銷A級",
+                "D-A客戶 - 經銷商大手客戶 & 既有客戶": "(D-A) 經銷A級",
+                "D-A客戶 - 經銷商 大手客戶 &既有客戶": "(D-A) 經銷A級",
+                "D-B客戶 - 經銷商 前一年新成交": "(D-B) 經銷B級",
+                "D-B客戶 - 經銷商前一年新成交": "(D-B) 經銷B級",
+                "D-C客戶 - 經銷商 預計開發及今年新成交": "(D-C) 經銷C級",
+                "D-C客戶 - 經銷商預計開發及今年新成交": "(D-C) 經銷C級"
+            }
+            if "客戶分類" in df.columns:
+                df["客戶分類"] = df["客戶分類"].replace(norm_map)
+
             df["日期"] = pd.to_datetime(df["日期"], errors='coerce').dt.date
             mask = (df["日期"] >= start_date) & (df["日期"] <= end_date)
             filtered_df = df.loc[mask].copy().sort_values(by=["日期"], ascending=True).reset_index(drop=True)
@@ -311,11 +312,7 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
 
         # 【資安強化】套用輸入清洗
         # 針對所有欄位進行檢查，防止 Excel Injection
-        # 兼容新版 Pandas (2.1.0+) 將 applymap 改為 map 的異動
-        if hasattr(final_df, 'map') and callable(getattr(pd.DataFrame, 'map', None)):
-            final_df = final_df.map(sanitize_csv_field)
-        else:
-            final_df = final_df.applymap(sanitize_csv_field)
+        final_df = final_df.applymap(sanitize_csv_field)
 
         # 6. 寫入
         val_list = [final_df.columns.values.tolist()] + final_df.values.tolist()
@@ -334,84 +331,63 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
         logging.error(f"Save failed: {e}")
         return False, str(e)
 
-
 # ==========================================
-#  陣列安全過濾器
+#  新增函式：儲存至客戶關係表單
 # ==========================================
-def ensure_list(data):
-    """確保傳入的資料絕對是 List 格式，防止字串被拆分成單一字母送出"""
-    if not data: 
-        return []
-    if isinstance(data, list): 
-        return data
-    if isinstance(data, str):
-        return [x.strip() for x in data.split(",")] if "," in data else [data]
-    return list(data)
-
-
-# ==========================================
-#  儲存至客戶關係表單 (HTTP POST 版)
-# ==========================================
-def save_to_crm_sheet(client, crm_data):
-    url = "https://docs.google.com/forms/d/e/1FAIpQLSdb1oeYmCenAjvRjFzYfKVWkIBzW105wb2K-JTj4YgJCFwkJQ/formResponse"
-    
-    # 1. 處理日期格式 (Google 只吃 YYYY-MM-DD)
-    visit_date = crm_data.get("拜訪日期")
-    visit_date_str = visit_date.strftime("%Y-%m-%d") if hasattr(visit_date, 'strftime') else str(visit_date)
-
-    # 2. 組合基礎 Payload (因為 UI 已全對齊表單選項，故直接取值即可)
-    payload_list = [
-        ("entry.96119068", crm_data.get("填寫人")),
-        ("entry.2111504476", crm_data.get("客戶名稱")),
-        ("entry.1357642524", crm_data.get("通路商")),
-        ("entry.1714915871", crm_data.get("行動方案")),
-        ("entry.934052072", crm_data.get("客戶性質")),
-        ("entry.1451405577", crm_data.get("產業別")),
-        ("entry.516181115", visit_date_str),
-        ("entry.783279195", crm_data.get("工作內容")),
-        ("entry.1781871147", crm_data.get("產出日期", "")),
-        ("entry.1117419766", str(crm_data.get("總金額", ""))),
-        ("entry.1488606205", crm_data.get("實際行程")),
-        ("entry.850004033", crm_data.get("客戶所屬")) 
-    ]
-
-    # 3. 處理選填欄位
-    lost_rec = crm_data.get("流失取回", "")
-    if lost_rec and lost_rec != "無":
-        payload_list.append(("entry.152392267", lost_rec))
-
-    comp_chan = crm_data.get("競爭通路", "")
-    if comp_chan and comp_chan != "無": 
-        payload_list.append(("entry.1890292749", comp_chan))
-        
-    dependency = crm_data.get("依賴事項", "")
-    if dependency: 
-        payload_list.append(("entry.847639223", dependency))
-
-    # 4. 處理複選題 (安全展開為多個 entry)
-    safe_products = ensure_list(crm_data.get("推廣產品_list"))
-    safe_brands = ensure_list(crm_data.get("競爭品牌_list"))
-
-    for p in safe_products:
-        payload_list.append(("entry.1642331636", p))
-    for b in safe_brands:
-        payload_list.append(("entry.1280930959", b))
-
-    # 5. 發送 POST
+def save_to_crm_sheet(client, data_dict):
+    """將資料寫入客戶關係表單 (回覆)"""
     try:
-        response = requests.post(url, data=payload_list)
-        if response.status_code == 200:
-            return True, "✅ 上傳成功！"
-        else:
-            import streamlit as st
-            logging.error(f"Form Submit Failed. Status: {response.status_code}")
-            st.error(f"🚨 送出失敗 (400)！請檢查下方文字是否與 Google 表單選項有出入：")
-            st.json(payload_list) # 終極抓漏保險
-            return False, f"上傳失敗 (400)"
-            
+        sh = client.open(CRM_DB_NAME)
+        try:
+            ws = sh.worksheet("表單回應 1")
+        except:
+            ws = sh.sheet1
+        
+        # 使用專用的格式轉換函式
+        timestamp_str = get_crm_time_str()             # 格式: 2026/1/26 下午 4:15:05
+        date_str = format_crm_date(data_dict.get("拜訪日期", "")) # 格式: 2026/1/22
+        
+        # 原始資料列表
+        raw_row_data = [
+            timestamp_str,                  # A1 時間戳記
+            data_dict.get("填寫人", ""),     # B1
+            data_dict.get("客戶名稱", ""),   # C1
+            data_dict.get("通路商", ""),     # D1
+            data_dict.get("競爭通路", ""),   # E1
+            data_dict.get("行動方案", ""),   # F1
+            data_dict.get("客戶性質", ""),   # G1
+            data_dict.get("流失取回", ""),   # H1
+            data_dict.get("產業別", ""),     # I1
+            date_str,                       # J1 拜訪日期
+            data_dict.get("推廣產品", ""),   # K1
+            data_dict.get("工作內容", ""),   # L1
+            data_dict.get("產出日期", ""),   # M1
+            data_dict.get("總金額", ""),     # N1
+            data_dict.get("依賴事項", ""),   # O1
+            data_dict.get("實際行程", ""),   # P1
+            data_dict.get("競爭品牌", ""),   # Q1
+            data_dict.get("客戶所屬", "")    # R1
+        ]
+        
+        # 【資安強化】套用輸入清洗
+        cleaned_row_data = [sanitize_csv_field(val) for val in raw_row_data]
+        
+        # 【修正】使用物理定位法 (Safe Append)
+        # 防止因表格格式導致自動判斷錯誤而覆蓋資料
+        try:
+            # 讀取 A 欄 (Timestamp) 確認目前行數
+            col_a = ws.col_values(1) 
+            next_row = len(col_a) + 1
+            ws.update(values=[cleaned_row_data], range_name=f"A{next_row}")
+        except Exception as update_err:
+            # 如果讀取 A 欄失敗，退回使用 append_row (備援)
+            logging.warning(f"Physical append failed, fallback to append_row: {update_err}")
+            ws.append_row(cleaned_row_data)
+
+        return True, "上傳成功"
     except Exception as e:
-        logging.error(f"Form Submit Error: {str(e)}")
-        return False, f"發生連線錯誤: {str(e)}"
+        logging.error(f"Save to CRM failed: {e}")
+        return False, f"上傳失敗: {e}"
 
 # ==========================================
 #  輸入驗證與清理
@@ -434,7 +410,7 @@ def render_copy_button(text_to_copy):
     支援現代瀏覽器與備援機制。
     """
     # 處理文字中的跳脫字元，避免 JS 錯誤
-    safe_text = text_to_copy.replace("`", "\`").replace("\\", "\\\\").replace("$", "\\$")
+    safe_text = text_to_copy.replace("`", r"\`").replace("\\", "\\\\").replace("$", r"\$")
     
     html_code = f"""
     <div style="margin-top: 5px; margin-bottom: 10px;">
@@ -841,8 +817,7 @@ def show(client, db_name, user_email, real_name):
                 
                 c1, c2 = st.columns(2)
                 with c1:
-                    # 這裡抓取自訂義的性質分類(A, B, C)，在送出時會在 save_to_crm_sheet 由我們自動修正
-                    f_type = st.selectbox("客戶性質 (自動抓取)", options=["A客戶 - 大手客戶 & 既有客戶", "B客戶 - 前一年新成交", "C客戶 - 預計開發及今年新成交", "D-A客戶 - 經銷商 大手客戶 & 既有客戶", "D-B客戶 - 經銷商 前一年新成交", "D-C客戶 - 經銷商 預計開發及今年新成交"], index=0)
+                    f_type = st.text_input("客戶性質 (自動帶入)", value=str(row_data.get("客戶分類", "")), disabled=True)
                 with c2:
                     f_content = st.text_area("拜訪目的/案件/設備", value=str(row_data.get("工作內容", "")), height=68)
                     f_status_desc = st.text_area("案件狀況說明", value=str(row_data.get("實際行程", "")), height=68, help="對應：實際行程")
@@ -852,6 +827,7 @@ def show(client, db_name, user_email, real_name):
 
                 col_a, col_b = st.columns(2)
                 with col_a:
+                    # 【修正】預設為填寫人 (若在清單中)
                     default_owner_idx = 0
                     if real_name in CRM_OPT_OWNER:
                         default_owner_idx = CRM_OPT_OWNER.index(real_name)
@@ -867,14 +843,13 @@ def show(client, db_name, user_email, real_name):
                     f_est_date = st.selectbox("案件預計產出日期", options=CRM_OPT_EST_DATE)
                     f_comp_brand = st.selectbox("競爭品牌", options=CRM_OPT_COMP_BRAND)
 
-                # 自動判斷流失客戶 (加入防呆模糊比對)
+                # 自動判斷流失客戶
                 current_client_name = str(row_data.get("客戶名稱", "")).strip()
                 default_lost_idx = 0
                 if current_client_name and current_client_name != "-":
-                    for idx, opt in enumerate(CRM_OPT_LOST_RECOVERY):
-                        if real_name in opt and current_client_name in opt:
-                            default_lost_idx = idx
-                            break
+                    expected_opt = f"{real_name} - {current_client_name}"
+                    if expected_opt in CRM_OPT_LOST_RECOVERY:
+                        default_lost_idx = CRM_OPT_LOST_RECOVERY.index(expected_opt)
 
                 f_lost_rec = st.selectbox("是否為流失客戶取回 (選填)", options=CRM_OPT_LOST_RECOVERY, index=default_lost_idx)
                 
@@ -907,13 +882,13 @@ def show(client, db_name, user_email, real_name):
                     "流失取回": f_lost_rec if f_lost_rec != "無" else "",
                     "產業別": f_industry,
                     "拜訪日期": f_date,
-                    "推廣產品_list": f_products,
+                    "推廣產品": ", ".join(f_products),
                     "工作內容": f_content,
                     "產出日期": f_est_date,
                     "總金額": str(f_amount),
                     "依賴事項": f_dependency,
                     "實際行程": f_status_desc,
-                    "競爭品牌_list": f_comp_brand,
+                    "競爭品牌": f_comp_brand,
                     "客戶所屬": f_owner
                 }
                 
@@ -925,4 +900,5 @@ def show(client, db_name, user_email, real_name):
                         st.session_state.dr_sync_data = None
                         time.sleep(1)
                         st.rerun()
-                    # 失敗的話，原頁面會保留，並由 save_to_crm_sheet 顯示紅色除錯方塊
+                    else:
+                        st.error(msg)
