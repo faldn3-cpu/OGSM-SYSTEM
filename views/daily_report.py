@@ -312,7 +312,10 @@ def save_to_google_sheet(ws, all_df, current_df, start_date, end_date):
 
         # 【資安強化】套用輸入清洗
         # 針對所有欄位進行檢查，防止 Excel Injection
-        final_df = final_df.applymap(sanitize_csv_field)
+        if hasattr(final_df, "map"):
+            final_df = final_df.map(sanitize_csv_field)
+        else:
+            final_df = final_df.applymap(sanitize_csv_field)
 
         # 6. 寫入
         val_list = [final_df.columns.values.tolist()] + final_df.values.tolist()

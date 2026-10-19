@@ -16,7 +16,7 @@ SYSTEM_SHEETS = [
 
 # === 設定:直賣全員名單 ===
 DIRECT_SALES_NAMES = [
-    "曾仁君", "溫達仁", "楊家豪", "莊富丞", "何宛茹", "張書偉", "黃柏翰"
+    "曾仁君", "溫達仁", "楊家豪", "莊富丞", "謝瑞騏", "何宛茹", "張書偉"
 ]
 
 # === 設定:經銷全員名單 ===
@@ -422,8 +422,7 @@ def show(client, db_name, user_email, real_name, is_manager):
     fname = f"業務日報彙整_{start_date}_{end_date}.csv"
     
     export_df = final_df.copy()
-    # pandas 2.1+ 將 applymap 改名為 map，以下寫法新舊版本皆相容
-    if hasattr(export_df, 'map') and callable(getattr(pd.DataFrame, 'map', None)):
+    if hasattr(export_df, "map"):
         export_df = export_df.map(sanitize_csv_field)
     else:
         export_df = export_df.applymap(sanitize_csv_field)
